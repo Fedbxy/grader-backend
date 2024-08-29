@@ -24,10 +24,10 @@ def get_submission(id: str):
 
 
 @app.post("/submit")
-def create_submission(id: Annotated[str, Form()], problem_id: Annotated[str, Form()], testcases: Annotated[int, Form()], language: Annotated[str, Form()], code: Annotated[str, Form()]):
+def create_submission(id: Annotated[str, Form()], problem_id: Annotated[str, Form()], time_limit: Annotated[int, Form()], memory_limit: Annotated[int, Form()], testcases: Annotated[int, Form()], language: Annotated[str, Form()], code: Annotated[str, Form()]):
     utils.create_file(id, language, code)
 
-    result = judge.judge(id, problem_id, testcases, language)
+    result = judge.judge(id, problem_id, time_limit, memory_limit, testcases, language)
 
     utils.remove_file(id, language)
 
@@ -42,6 +42,6 @@ def create_submission(id: Annotated[str, Form()], problem_id: Annotated[str, For
     }
 
 
-@app.post("/testcase/upload/{problem_id}")
+@app.post("/testcase/{problem_id}/upload")
 def upload_testcase(problem_id: int, file: UploadFile):
     return utils.create_testcase(problem_id, file)

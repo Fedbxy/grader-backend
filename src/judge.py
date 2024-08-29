@@ -18,10 +18,7 @@ def compile(id: int, language: str):
     return None
 
 
-def execute(id: int, problem_id: int, language: str, testcase: int):
-    time_limit = 1000
-    memory_limit = 32
-
+def execute(id: int, problem_id: int, time_limit: int, memory_limit: int, language: str, testcase: int):
     input = open(f"testcases/{problem_id}/{testcase}.in", "r")
     expected_output = open(f"testcases/{problem_id}/{testcase}.sol", "r")
 
@@ -93,7 +90,7 @@ def execute(id: int, problem_id: int, language: str, testcase: int):
         }
     
 
-def judge(id: int, problem_id: int, testcases: int, language: str):
+def judge(id: int, problem_id: int, time_limit: int, memory_limit: int, testcases: int, language: str):
     submission[id] = "Compiling"
     compile_result = compile(id, language)
     if compile_result:
@@ -122,7 +119,7 @@ def judge(id: int, problem_id: int, testcases: int, language: str):
             }
 
         submission[id] = f"Running testcase {i + 1}"
-        execute_result = execute(id, problem_id, language, i + 1)
+        execute_result = execute(id, problem_id, time_limit, memory_limit, language, i + 1)
 
         result.append({
             "testcase": i + 1,

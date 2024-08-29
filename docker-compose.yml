@@ -1,0 +1,20 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: grader-backend
+    ports:
+      - 8000:8000
+    volumes:
+      - backend-data:/app/testcases
+    networks:
+      - grader_grader-network
+    restart: unless-stopped
+
+volumes:
+  backend-data:
+
+networks:
+  grader_grader-network:
+    external: true

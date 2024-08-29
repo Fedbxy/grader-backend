@@ -4,6 +4,7 @@ import time
 import os
 
 from config import command
+from utils import normalize_output
 
 
 submission = {}
@@ -134,8 +135,3 @@ def judge(id: int, problem_id: int, testcases: int, language: str):
     submission[id] = "Finished"
     return result
 
-
-def normalize_output(output: str):
-    lines = output.split("\n")
-    normalized_lines = (line.rstrip() for line in lines)
-    return ("\n".join(normalized_lines)).strip()

@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Form, UploadFile
 from typing import Annotated
+import threading
 
 import utils
 import judge
@@ -11,34 +12,36 @@ app = FastAPI()
 @app.get("/submission/{id}")
 def get_submission(id: str):
     if id not in judge.submission:
-        return "Submission not found"
+        return {
+            "error": "Submission not found",
+        }
     return judge.submission[id]
 
 
 @app.get("/submission/{id}/finished")
 def get_submission(id: str):
-    if id not in judge.submission or judge.submission[id] != "Finished":
-        return "Submission not found"
+    if id not in judge.submission:
+        return {
+            "error": "Submission not found",
+        }
+    if not judge.submission[id].get("result"):
+        return {
+            "error": "Submission is still running",
+        }
     judge.submission.pop(id)
-    return "Submission removed"
+    return {
+        "message": "Submission removed",
+    }
 
 
 @app.post("/submit")
 def create_submission(id: Annotated[str, Form()], problem_id: Annotated[str, Form()], time_limit: Annotated[int, Form()], memory_limit: Annotated[int, Form()], testcases: Annotated[int, Form()], language: Annotated[str, Form()], code: Annotated[str, Form()]):
     utils.create_file(id, language, code)
 
-    result = judge.judge(id, problem_id, time_limit, memory_limit, testcases, language)
-
-    utils.remove_file(id, language)
-
-    score = 0
-    for verdict in result:
-        if verdict == "AC":
-            score += 1
+    threading.Thread(target=judge.judge, args=(id, problem_id, time_limit, memory_limit, testcases, language)).start()
 
     return {
-        "score": score,
-        "result": result,
+        "message": "Submission created",
     }
 
 

@@ -4,7 +4,7 @@ import time
 import os
 
 from config import command
-from utils import normalize_output
+from utils import normalize_output, remove_file
 
 
 submission = {}
@@ -38,16 +38,16 @@ def execute(id: int, problem_id: int, time_limit: int, memory_limit: int, langua
                 process.kill()
                 return {
                     "verdict": "MLE",
-                    "time": f"{(time.time() - start_time) * 1000}ms",
-                    "memory": f"{memory_usage}KB",
+                    "time": f"{(time.time() - start_time) * 1000}",
+                    "memory": f"{memory_usage}",
                 }
             
             if (time.time() - start_time) * 1000 > time_limit:
                 process.kill()
                 return {
                     "verdict": "TLE",
-                    "time": f"{(time.time() - start_time) * 1000}ms",
-                    "memory": f"{memory_usage}KB",
+                    "time": f"{(time.time() - start_time) * 1000}",
+                    "memory": f"{memory_usage}",
                 }
 
         stdout, stderr = process.communicate()
@@ -57,30 +57,30 @@ def execute(id: int, problem_id: int, time_limit: int, memory_limit: int, langua
         if process.returncode != 0:
             return {
                 "verdict": "RE",
-                "time": f"{execution_time}ms",
-                "memory": f"{memory_usage}KB",
+                "time": f"{execution_time}",
+                "memory": f"{memory_usage}",
                 "error": stderr,
             }
 
         if stderr:
             return {
                 "verdict": "RE",
-                "time": f"{execution_time}ms",
-                "memory": f"{memory_usage}KB",
+                "time": f"{execution_time}",
+                "memory": f"{memory_usage}",
                 "error": stderr,
             }
         
         if normalize_output(stdout) == normalize_output(expected_output.read()):
             return {
                 "verdict": "AC",
-                "time": f"{execution_time}ms",
-                "memory": f"{memory_usage}KB",
+                "time": f"{execution_time}",
+                "memory": f"{memory_usage}",
             }
         
         return {
             "verdict": "WA",
-            "time": f"{execution_time}ms",
-            "memory": f"{memory_usage}KB",
+            "time": f"{execution_time}",
+            "memory": f"{memory_usage}",
         }
     except Exception as error:
         process.kill()
@@ -91,34 +91,50 @@ def execute(id: int, problem_id: int, time_limit: int, memory_limit: int, langua
     
 
 def judge(id: int, problem_id: int, time_limit: int, memory_limit: int, testcases: int, language: str):
-    submission[id] = "Compiling"
+    submission[id] = {
+        "verdict": "Compiling",
+    }
     compile_result = compile(id, language)
     if compile_result:
-        submission[id] = "Finished"
-        return {
-            "verdict": "CE",
-            "error": compile_result,
+        submission[id] = {
+            "score": 0,
+            "result": [{
+                "verdict": "CE",
+                "error": compile_result,
+            }],
         }
+        remove_file(id, language)
+        return
 
     if not os.path.exists(f"testcases/{problem_id}") or not os.listdir(f"testcases/{problem_id}"):
-        submission[id] = "Finished"
-        return {
-            "verdict": "JE",
-            "error": "No testcases found",
+        submission[id] = {
+            "score": 0,
+            "result": [{
+                "verdict": "JE",
+                "error": "No testcases found",
+            }],
         }
+        remove_file(id, language)
+        return
     
     result = []
 
     for i in range(testcases):
         testcase_valid = os.path.exists(f"testcases/{problem_id}/{i + 1}.in") and os.path.exists(f"testcases/{problem_id}/{i + 1}.sol")
         if not testcase_valid:
-            submission[id] = "Finished"
-            return {
-                "verdict": "JE",
-                "error": f"Testcase {i + 1} is missing",
+            submission[id] = {
+                "score": 0,
+                "result": [{
+                    "verdict": "JE",
+                    "error": f"Testcase {i + 1} is missing",
+                }]
             }
+            remove_file(id, language)
+            return
 
-        submission[id] = f"Running testcase {i + 1}"
+        submission[id] = {
+            "verdict": f"Running on testcase {i + 1}",
+        }
         execute_result = execute(id, problem_id, time_limit, memory_limit, language, i + 1)
 
         result.append({
@@ -129,6 +145,14 @@ def judge(id: int, problem_id: int, time_limit: int, memory_limit: int, testcase
             "error": execute_result.get("error"),
         })
 
-    submission[id] = "Finished"
-    return result
+    remove_file(id, language)
 
+    score = 0
+    for i in result:
+        if i["verdict"] == "AC":
+            score += 1
+
+    submission[id] = {
+        "score": score,
+        "result": result,
+    }

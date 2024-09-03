@@ -4,6 +4,7 @@ import threading
 
 import utils
 import judge
+import que
 
 
 app = FastAPI()
@@ -36,9 +37,7 @@ def get_submission(id: str):
 
 @app.post("/submit")
 def create_submission(id: Annotated[str, Form()], problem_id: Annotated[str, Form()], time_limit: Annotated[int, Form()], memory_limit: Annotated[int, Form()], testcases: Annotated[int, Form()], language: Annotated[str, Form()], code: Annotated[str, Form()]):
-    utils.create_file(id, language, code)
-
-    threading.Thread(target=judge.judge, args=(id, problem_id, time_limit, memory_limit, testcases, language)).start()
+    que.add(id, problem_id, time_limit, memory_limit, testcases, language, code)
 
     return {
         "message": "Submission created",
@@ -48,3 +47,6 @@ def create_submission(id: Annotated[str, Form()], problem_id: Annotated[str, For
 @app.post("/testcase/{problem_id}/upload")
 def upload_testcase(problem_id: int, file: UploadFile):
     return utils.create_testcase(problem_id, file)
+
+
+threading.Thread(target=que.process, daemon=True).start()

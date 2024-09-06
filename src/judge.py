@@ -120,7 +120,7 @@ def evaluate(isolatePath: str, id: int, problemId: int, timeLimit: int, memoryLi
                     "error": f"Testcase {i + 1} is missing",
                 }]
             }
-            removeFile(id, language)
+            removeFile(id)
             return
 
         submission[id] = {
@@ -136,7 +136,7 @@ def evaluate(isolatePath: str, id: int, problemId: int, timeLimit: int, memoryLi
             "error": executeResult.get("error"),
         })
 
-    removeFile(id, language)
+    removeFile(id)
 
     score = 0
     for i in result:

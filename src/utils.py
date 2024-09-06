@@ -4,42 +4,43 @@ from zipfile import ZipFile
 from fastapi import UploadFile
 
 
-def normalize_output(output: str):
+def normalizeOutput(output: str):
     lines = output.split("\n")
-    normalized_lines = (line.rstrip() for line in lines)
-    return ("\n".join(normalized_lines)).strip()
+    normalizedLines = (line.rstrip() for line in lines)
+    return ("\n".join(normalizedLines)).strip()
 
 
-def create_file(id: int, language: str, code: str):
-    if not os.path.exists("tmp"):
-        os.makedirs("tmp")
+def createFile(isolatePath: str, id: int, language: str, code: str):
+    path = f"{isolatePath}/{id}.{language}"
 
-    with open(f"tmp/{id}.{language}", "w") as file:
+    with open(path, "w") as file:
         file.write(code)
 
-
-def remove_file(id: int, language: str):
-    if os.path.exists(f"tmp/{id}"):
-        os.remove(f"tmp/{id}")
-
-    if os.path.exists(f"tmp/{id}.{language}"):
-        os.remove(f"tmp/{id}.{language}")
-
-    if not os.listdir("tmp"):
-        os.rmdir("tmp")
+    return path
 
 
-def create_testcase(problem_id: int, file: UploadFile):
+def removeFile(id: int):
+    meta = f"tmp/{id}.meta"
+    dir = os.path.dirname(meta)
+
+    if os.path.exists(meta):
+        os.remove(meta)
+
+    if not os.listdir(dir):
+        os.rmdir(dir)
+
+
+def createTestcase(problemId: int, file: UploadFile):
     if file.filename.split(".")[-1] != "zip":
         return "Invalid file type"
 
     if not os.path.exists("testcases"):
         os.makedirs("testcases")
 
-    if os.path.exists(f"testcases/{problem_id}"):
-        shutil.rmtree(f"testcases/{problem_id}")
+    if os.path.exists(f"testcases/{problemId}"):
+        shutil.rmtree(f"testcases/{problemId}")
 
-    os.makedirs(f"testcases/{problem_id}")
+    os.makedirs(f"testcases/{problemId}")
 
-    with ZipFile(file.file, "r") as zip_file:
-        zip_file.extractall(f"testcases/{problem_id}")
+    with ZipFile(file.file, "r") as zipFile:
+        zipFile.extractall(f"testcases/{problemId}")

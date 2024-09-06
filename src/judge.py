@@ -1,112 +1,85 @@
 import subprocess
-import psutil
-import time
 import os
 
 from config import command
-from utils import normalize_output, remove_file
+from utils import normalizeOutput, removeFile
+from isolate import readMetaFile
 
 
 submission = {}
 
 
-def compile(id: int, language: str):
+def compile(isolatePath: str, id: int, language: str):
     try:
-        subprocess.run(command.compile(id, language), check=True, stderr=subprocess.PIPE)
+        subprocess.run(command.compile(isolatePath, id, language), check=True, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as error:
         return error.stderr
     return None
 
 
-def execute(id: int, problem_id: int, time_limit: int, memory_limit: int, language: str, testcase: int):
-    input = open(f"testcases/{problem_id}/{testcase}.in", "r")
-    expected_output = open(f"testcases/{problem_id}/{testcase}.sol", "r")
+def execute(isolatePath: str, id: int, problemId: int, timeLimit: int, memoryLimit: int, language: str, testcase: int):
+    inputPath = f"testcases/{problemId}/{testcase}.in"
+    expectedOutputPath = f"testcases/{problemId}/{testcase}.sol"
 
-    start_time = time.time()
-    memory_usage = 0
+    metaPath = f"tmp/{id}.meta"
+    outputPath = f"{id}.output"
+    errorPath = f"{id}.error"
 
-    process = subprocess.Popen(command.execute(id, language), stdin=input, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    cmd = (
+        f"isolate --box-id={id} "
+        f"--meta={metaPath} --stdout={outputPath} --stderr={errorPath} "
+        f"--time={timeLimit / 1000} --mem={memoryLimit * 1024} "
+        f"--run -- {command.execute(id, language)} "
+        f"< {inputPath}"
+    )
+
+    process = subprocess.Popen(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     try:
-        while not process.poll():
-            try:
-                memory_usage = max(memory_usage, psutil.Process(process.pid).memory_info().rss / 1024)
-            except psutil.NoSuchProcess:
-                break
-
-            if memory_usage > memory_limit * 1024:
-                process.kill()
-                return {
-                    "verdict": "MLE",
-                    "time": f"{(time.time() - start_time) * 1000}",
-                    "memory": f"{memory_usage}",
-                }
-            
-            if (time.time() - start_time) * 1000 > time_limit:
-                process.kill()
-                return {
-                    "verdict": "TLE",
-                    "time": f"{(time.time() - start_time) * 1000}",
-                    "memory": f"{memory_usage}",
-                }
-
-        stdout, stderr = process.communicate()
-
-        execution_time = (time.time() - start_time) * 1000
-
-        if process.returncode != 0:
-            return {
-                "verdict": "RE",
-                "time": f"{execution_time}",
-                "memory": f"{memory_usage}",
-                "error": stderr,
-            }
-
-        if stderr:
-            return {
-                "verdict": "RE",
-                "time": f"{execution_time}",
-                "memory": f"{memory_usage}",
-                "error": stderr,
-            }
-        
-        if normalize_output(stdout) == normalize_output(expected_output.read()):
-            return {
-                "verdict": "AC",
-                "time": f"{execution_time}",
-                "memory": f"{memory_usage}",
-            }
-        
-        return {
-            "verdict": "WA",
-            "time": f"{execution_time}",
-            "memory": f"{memory_usage}",
-        }
-    except Exception as error:
+        process.communicate(timeout=timeLimit / 1000 + 5)
+    except subprocess.TimeoutExpired:
         process.kill()
-        return {
-            "verdict": "RE",
-            "error": str(error),
-        }
+        raise Exception("Isolate didn't terminate in time")
     
+    meta = readMetaFile(metaPath)
+    output = open(f"{isolatePath}/{outputPath}").read()
+    expectedOutput = open(expectedOutputPath).read()
 
-def judge(id: int, problem_id: int, time_limit: int, memory_limit: int, testcases: int, language: str):
-    submission[id] = {
-        "verdict": "Compiling",
+    result = {
+        "time": float(meta["time"]) * 1000,
+        "memory": float(meta["max-rss"]),
     }
-    compile_result = compile(id, language)
-    if compile_result:
-        submission[id] = {
-            "score": 0,
-            "result": [{
-                "verdict": "CE",
-                "error": compile_result,
-            }],
-        }
-        remove_file(id, language)
-        return
 
-    if not os.path.exists(f"testcases/{problem_id}") or not os.listdir(f"testcases/{problem_id}"):
+    status = "status" in meta and meta["status"] or None
+    exitsig = "exitsig" in meta and meta["exitsig"] or None
+
+    if status and status == "XX":
+        raise Exception("Isolate failed to execute")
+    
+    if status and status == "TO":
+        result["verdict"] = "TLE"
+        result["time"] = timeLimit
+        return result
+    
+    if exitsig and exitsig == "6":
+        result["verdict"] = "MLE"
+        result["memory"] = memoryLimit * 1024
+        return result
+    
+    if status and (status == "SG" or status == "RE"):
+        result["verdict"] = "RE"
+        return result
+
+    if (normalizeOutput(output) == normalizeOutput(expectedOutput)):
+        result["verdict"] = "AC"
+        return result
+    
+    result["verdict"] = "WA"
+    return result
+
+
+def evaluate(isolatePath: str, id: int, problemId: int, timeLimit: int, memoryLimit: int, testcases: int, language: str):
+    if not os.path.exists(f"testcases/{problemId}") or not os.listdir(f"testcases/{problemId}"):
         submission[id] = {
             "score": 0,
             "result": [{
@@ -114,14 +87,32 @@ def judge(id: int, problem_id: int, time_limit: int, memory_limit: int, testcase
                 "error": "No testcases found",
             }],
         }
-        remove_file(id, language)
         return
+    
+    submission[id] = {
+        "verdict": "Compiling",
+    }
+    compileResult = compile(isolatePath, id, language)
+    if compileResult:
+        submission[id] = {
+            "score": 0,
+            "result": [{
+                "verdict": "CE",
+                "error": compileResult,
+            }],
+        }
+        return
+    
+    if not os.path.exists("tmp"):
+        os.makedirs("tmp")
+    open(f"{isolatePath}/{id}.output", "w").close()
+    open(f"{isolatePath}/{id}.error", "w").close()
     
     result = []
 
     for i in range(testcases):
-        testcase_valid = os.path.exists(f"testcases/{problem_id}/{i + 1}.in") and os.path.exists(f"testcases/{problem_id}/{i + 1}.sol")
-        if not testcase_valid:
+        testcaseValid = os.path.exists(f"testcases/{problemId}/{i + 1}.in") and os.path.exists(f"testcases/{problemId}/{i + 1}.sol")
+        if not testcaseValid:
             submission[id] = {
                 "score": 0,
                 "result": [{
@@ -129,23 +120,23 @@ def judge(id: int, problem_id: int, time_limit: int, memory_limit: int, testcase
                     "error": f"Testcase {i + 1} is missing",
                 }]
             }
-            remove_file(id, language)
+            removeFile(id, language)
             return
 
         submission[id] = {
             "verdict": f"Running on testcase {i + 1}",
         }
-        execute_result = execute(id, problem_id, time_limit, memory_limit, language, i + 1)
+        executeResult = execute(isolatePath, id, problemId, timeLimit, memoryLimit, language, i + 1)
 
         result.append({
             "testcase": i + 1,
-            "verdict": execute_result["verdict"],
-            "time": execute_result.get("time"),
-            "memory": execute_result.get("memory"),
-            "error": execute_result.get("error"),
+            "verdict": executeResult["verdict"],
+            "time": executeResult.get("time"),
+            "memory": executeResult.get("memory"),
+            "error": executeResult.get("error"),
         })
 
-    remove_file(id, language)
+    removeFile(id, language)
 
     score = 0
     for i in result:

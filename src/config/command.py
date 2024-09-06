@@ -1,9 +1,7 @@
-path = "tmp"
-
-def compile(id: int, language: str):
+def compile(isolatePath: str, id: int, language: str):
     commands = {
-        "cpp": ["g++", "-std=c++17", "-O2", f"{path}/{id}.cpp", "-o", f"{path}/{id}"],
-        "c": ["gcc", "-std=c11", "-O2", f"{path}/{id}.c", "-o", f"{path}/{id}"],
+        "cpp": ["/usr/bin/g++", "-std=c++17", "-O2", f"{isolatePath}/{id}.cpp", "-o", f"{isolatePath}/{id}"],
+        "c": ["/usr/bin/gcc", "-std=c11", "-O2", f"{isolatePath}/{id}.c", "-o", f"{isolatePath}/{id}"],
         "py": ["true"],
     }
 
@@ -11,9 +9,9 @@ def compile(id: int, language: str):
 
 def execute(id: int, language: str):
     commands = {
-        "cpp": [f"{path}/{id}"],
-        "c": [f"{path}/{id}"],
-        "py": ["python3", "-B", f"{path}/{id}.py"],
+        "cpp": f"./{id}",
+        "c": f"./{id}",
+        "py": f"/usr/local/bin/python3 -B {id}.py",
     }
 
     return commands[language]

@@ -2,28 +2,29 @@ from queue import Queue
 import threading
 import time
 
-import utils
-import judge
+from utils import createFile
+from judge import submission, evaluate
+from isolate import initIsolate, cleanupIsolate
 
 
 queue = Queue()
-lane_status = {
+laneStatus = {
     "1": False,
     "2": False,
     "3": False,
 }
 
 
-def add(id: str, problem_id: str, time_limit: int, memory_limit: int, testcases: int, language: str, code: str):
-    judge.submission[id] = {
+def add(id: str, problemId: str, timeLimit: int, memoryLimit: int, testcases: int, language: str, code: str):
+    submission[id] = {
         "verdict": "In queue",
     }
 
     data = {
         "id": id,
-        "problem_id": problem_id,
-        "time_limit": time_limit,
-        "memory_limit": memory_limit,
+        "problemId": problemId,
+        "timeLimit": timeLimit,
+        "memoryLimit": memoryLimit,
         "testcases": testcases,
         "language": language,
         "code": code,
@@ -32,9 +33,9 @@ def add(id: str, problem_id: str, time_limit: int, memory_limit: int, testcases:
     queue.put(data)
 
 
-def free_lane():
-    for lane in lane_status:
-        if not lane_status[lane]:
+def getFreeLane():
+    for lane in laneStatus:
+        if not laneStatus[lane]:
             return lane
     return None
     
@@ -42,28 +43,43 @@ def free_lane():
 def process():
     while True:
         time.sleep(0.1)
-        lane = free_lane()
+        lane = getFreeLane()
         if lane is None or queue.empty():
             continue
 
-        lane_status[lane] = True
+        laneStatus[lane] = True
         
         data = queue.get()
 
         id = data["id"]
-        problem_id = data["problem_id"]
-        time_limit = data["time_limit"]
-        memory_limit = data["memory_limit"]
+        problemId = data["problemId"]
+        timeLimit = data["timeLimit"]
+        memoryLimit = data["memoryLimit"]
         testcases = data["testcases"]
         language = data["language"]
         code = data["code"]
 
-        threading.Thread(target=task, args=(lane, id, problem_id, time_limit, memory_limit, testcases, language, code)).start()
+        threading.Thread(target=task, args=(lane, id, problemId, timeLimit, memoryLimit, testcases, language, code)).start()
 
 
-def task(lane: str, id: str, problem_id: str, time_limit: int, memory_limit: int, testcases: int, language: str, code: str):
-    utils.create_file(id, language, code)
+def task(lane: str, id: str, problemId: str, timeLimit: int, memoryLimit: int, testcases: int, language: str, code: str):
+    isolatePath = initIsolate(id)
 
-    judge.judge(id, problem_id, time_limit, memory_limit, testcases, language)
+    if isolatePath is None:
+        submission[id] = {
+            "score": 0,
+            "result": [{
+                "verdict": "SE",
+                "error": "Couldn't initialize isolate",
+            }],
+        }
+        laneStatus[lane] = False
+        return
 
-    lane_status[lane] = False
+    createFile(isolatePath, id, language, code)
+
+    evaluate(isolatePath, id, problemId, timeLimit, memoryLimit, testcases, language)
+
+    cleanupIsolate(id)
+
+    laneStatus[lane] = False

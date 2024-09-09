@@ -11,9 +11,9 @@ submission = {}
 
 def compile(isolatePath: str, id: int, language: str):
     try:
-        subprocess.run(command.compile(isolatePath, id, language), check=True, stderr=subprocess.PIPE)
+        subprocess.run(command.compile(isolatePath, id, language), check=True, text=True, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as error:
-        return error.stderr
+        return error.stderr.replace(isolatePath, "")
     return None
 
 

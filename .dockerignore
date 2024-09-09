@@ -1,4 +1,11 @@
 __pycache__
 testcases
+Dockerfile
+docker-compose*
 .dockerignore
+.git
 .gitignore
+.github
+*.md
+LICENSE
+.DS_Store

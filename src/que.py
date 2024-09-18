@@ -10,8 +10,6 @@ from isolate import initIsolate, cleanupIsolate
 queue = Queue()
 laneStatus = {
     "1": False,
-    "2": False,
-    "3": False,
 }
 
 

@@ -8,14 +8,13 @@ from isolate import initIsolate, cleanupIsolate
 
 
 queue = Queue()
-laneStatus = {
-    "1": False,
-}
+totalLanes = 1
+laneStatus = {i: False for i in range(totalLanes)}
 
 
 def add(id: str, problemId: str, timeLimit: int, memoryLimit: int, testcases: int, language: str, code: str):
     submission[id] = {
-        "verdict": "In queue",
+        "status": "In queue",
     }
 
     data = {
@@ -66,10 +65,8 @@ def task(lane: str, id: str, problemId: str, timeLimit: int, memoryLimit: int, t
     if isolatePath is None:
         submission[id] = {
             "score": 0,
-            "result": [{
-                "verdict": "SE",
-                "error": "Couldn't initialize isolate",
-            }],
+            "errorCode": "SE",
+            "error": "Couldn't initialize isolate",
         }
         laneStatus[lane] = False
         return

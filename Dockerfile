@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN apk add git make libcap-dev elogind-dev
 RUN git clone https://github.com/ioi/isolate.git
+RUN sed -i 's/SYS_quotactl_fd/SYS_quotactl/' isolate/rules.c
 
 RUN make --directory=isolate isolate
 RUN make --directory=isolate install

@@ -1,8 +1,9 @@
 import subprocess
 import os
+import json
 
 from config import command
-from utils import normalizeOutput, removeFile
+from utils import normalizeOutput, removeFile, readSubtask
 from isolate import readMetaFile
 
 
@@ -82,24 +83,33 @@ def evaluate(isolatePath: str, id: int, problemId: int, timeLimit: int, memoryLi
     if not os.path.exists(f"testcases/{problemId}") or not os.listdir(f"testcases/{problemId}"):
         submission[id] = {
             "score": 0,
-            "result": [{
-                "verdict": "JE",
-                "error": "No testcases found",
-            }],
+            "errorCode": "JE",
+            "error": "No testcases found",
         }
         return
-    
+
+    subtask_cases = []
+    if os.path.exists(f"testcases/{problemId}/subtask.json"):
+        subtask_data = readSubtask(problemId, testcases)
+        if "error" in subtask_data:
+            submission[id] = {
+                "score": 0,
+                "errorCode": "JE",
+                "error": subtask_data["error"],
+            }
+            return
+
+        subtask_cases = subtask_data["data"]
+
     submission[id] = {
-        "verdict": "Compiling",
+        "status": "Compiling",
     }
     compileResult = compile(isolatePath, id, language)
     if compileResult:
         submission[id] = {
             "score": 0,
-            "result": [{
-                "verdict": "CE",
-                "error": compileResult,
-            }],
+            "errorCode": "CE",
+            "error": compileResult,
         }
         return
     
@@ -107,43 +117,91 @@ def evaluate(isolatePath: str, id: int, problemId: int, timeLimit: int, memoryLi
         os.makedirs("tmp")
     open(f"{isolatePath}/{id}.output", "w").close()
     open(f"{isolatePath}/{id}.error", "w").close()
-    
-    result = []
 
-    for i in range(testcases):
-        testcaseValid = os.path.exists(f"testcases/{problemId}/{i + 1}.in") and os.path.exists(f"testcases/{problemId}/{i + 1}.sol")
-        if not testcaseValid:
+    if not subtask_cases:
+        subtask_cases = [{
+            "id": 1,
+            "cases": list(range(1, testcases + 1)),
+            "weight": testcases,
+            "group": False,
+            "require": [],
+            "option": "sum",
+        }]
+
+    total_score = 0
+    scores = []
+    weights = [subtask["weight"] for subtask in subtask_cases]
+    verdicts = []
+    times = []
+    memories = []
+    requirePassed = [False] * len(subtask_cases)
+
+    for subtask in subtask_cases:
+        subtask_score = 0
+        subtask_verdicts = []
+        subtask_times = []
+        subtask_memories = []
+        isSkipped = False
+
+        for case in subtask["cases"]:
+            testcaseValid = os.path.exists(f"testcases/{problemId}/{case}.in") and os.path.exists(f"testcases/{problemId}/{case}.sol")
+            if not testcaseValid:
+                submission[id] = {
+                    "score": 0,
+                    "errorCode": "JE",
+                    "error": f"Testcase {case} not found",
+                }
+                removeFile(id)
+                return
+
             submission[id] = {
-                "score": 0,
-                "result": [{
-                    "verdict": "JE",
-                    "error": f"Testcase {i + 1} is missing",
-                }]
+                "status": f"Running on testcase {case}",
             }
-            removeFile(id)
-            return
 
-        submission[id] = {
-            "verdict": f"Running on testcase {i + 1}",
-        }
-        executeResult = execute(isolatePath, id, problemId, timeLimit, memoryLimit, language, i + 1)
+            if isSkipped or any(not requirePassed[req - 1] for req in subtask["require"]):
+                subtask_verdicts.append("SKP")
+                subtask_times.append(0)
+                subtask_memories.append(0)
+                continue
 
-        result.append({
-            "testcase": i + 1,
-            "verdict": executeResult["verdict"],
-            "time": executeResult.get("time"),
-            "memory": executeResult.get("memory"),
-            "error": executeResult.get("error"),
-        })
+            executeResult = execute(isolatePath, id, problemId, timeLimit, memoryLimit, language, case)
+
+            subtask_verdicts.append(executeResult["verdict"])
+            subtask_times.append(executeResult.get("time"))
+            subtask_memories.append(executeResult.get("memory"))
+
+            if executeResult["verdict"] == "AC":
+                subtask_score += 1
+                if subtask["option"] == "max":
+                    subtask_score = max(subtask_score, 0)
+                elif subtask["option"] == "min":
+                    subtask_score = min(subtask_score, 1)
+            elif subtask["group"]:
+                isSkipped = True
+
+        if subtask["group"] and isSkipped:
+            subtask_score = 0
+
+        if subtask_score == len(subtask["cases"]):
+            requirePassed[int(subtask["id"]) - 1] = True
+
+        score = subtask_score / len(subtask["cases"]) * subtask["weight"]
+        total_score += score
+        scores.append(score)
+        verdicts.append(subtask_verdicts)
+        times.append(subtask_times)
+        memories.append(subtask_memories)
 
     removeFile(id)
 
-    score = 0
-    for i in result:
-        if i["verdict"] == "AC":
-            score += 1
-
+    weights = [subtask["weight"] for subtask in subtask_cases]
     submission[id] = {
-        "score": score,
-        "result": result,
+        "score": total_score,
+        "result": {
+            "scores": scores,
+            "verdicts": verdicts,
+            "times": times,
+            "memories": memories,
+            "weights": weights,
+        },
     }

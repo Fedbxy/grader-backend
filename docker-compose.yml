@@ -1,5 +1,6 @@
 services:
   backend:
+    image: ${IMAGE_NAME}:latest
     build:
       context: .
       dockerfile: Dockerfile

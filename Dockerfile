@@ -1,11 +1,19 @@
-FROM python:3-alpine 
+FROM python:3.12-slim 
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN apk update && apk add gcc g++ libc-dev linux-headers
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN apk add git make libcap-dev elogind-dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    libcap-dev \
+    libsystemd-dev \
+    libseccomp-dev \
+    pkg-config \
+    pypy3 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN git clone https://github.com/ioi/isolate.git
 RUN sed -i 's/SYS_quotactl_fd/SYS_quotactl/' isolate/rules.c
 

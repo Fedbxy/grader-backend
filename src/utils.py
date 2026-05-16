@@ -3,6 +3,7 @@ import shutil
 import json
 from zipfile import ZipFile
 from fastapi import UploadFile
+from config.languages import LANGUAGE_REGISTRY
 
 
 def normalizeOutput(output: str):
@@ -12,7 +13,7 @@ def normalizeOutput(output: str):
 
 
 def createFile(isolatePath: str, id: int, language: str, code: str):
-    path = f"{isolatePath}/{id}.{language}"
+    path = f"{isolatePath}/{id}.{LANGUAGE_REGISTRY[language]['extension']}"
 
     with open(path, "w") as file:
         file.write(code)

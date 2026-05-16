@@ -1,8 +1,7 @@
 import subprocess
 import os
-import json
 
-from config import command
+from config.languages import LANGUAGE_REGISTRY
 from utils import normalizeOutput, removeFile, readSubtask
 from isolate import readMetaFile
 
@@ -12,7 +11,7 @@ submission = {}
 
 def compile(isolatePath: str, id: int, language: str):
     try:
-        subprocess.run(command.compile(isolatePath, id, language), check=True, text=True, stderr=subprocess.PIPE)
+        subprocess.run(LANGUAGE_REGISTRY[language]["compile"](isolatePath, id), check=True, text=True, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as error:
         return error.stderr.replace(isolatePath, "")
     return None
@@ -26,11 +25,14 @@ def execute(isolatePath: str, id: int, problemId: int, timeLimit: int, memoryLim
     outputPath = f"{id}.output"
     errorPath = f"{id}.error"
 
+    timeLimit *= LANGUAGE_REGISTRY[language]["time_multiplier"]
+    memoryLimit *= LANGUAGE_REGISTRY[language]["memory_multiplier"]
+
     cmd = (
         f"isolate --box-id={id} "
         f"--meta={metaPath} --stdout={outputPath} --stderr={errorPath} "
         f"--time={timeLimit / 1000} --mem={memoryLimit * 1024} "
-        f"--run -- {command.execute(id, language)} "
+        f"--run -- {LANGUAGE_REGISTRY[language]['execute'](id)} "
         f"< {inputPath}"
     )
 

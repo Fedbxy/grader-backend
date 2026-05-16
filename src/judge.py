@@ -9,11 +9,24 @@ from isolate import readMetaFile
 submission = {}
 
 
-def compile(isolatePath: str, id: int, language: str):
+def compile(id: int, language: str):
+    cmd = [
+        "isolate",
+        f"--box-id={id}",
+        f"--mem={1024 * 1024}",
+        f"--time={10}",
+        "--processes=100",
+        "--env=PATH=/usr/bin",
+        "--run",
+        "--",
+    ] + LANGUAGE_REGISTRY[language]["compile"]("./", id)
+
     try:
-        subprocess.run(LANGUAGE_REGISTRY[language]["compile"](isolatePath, id), check=True, text=True, stderr=subprocess.PIPE)
+        subprocess.run(cmd, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except subprocess.TimeoutExpired:
+        return "Compilation Time Limit Exceeded"
     except subprocess.CalledProcessError as error:
-        return error.stderr.replace(isolatePath, "")
+        return error.stderr[2:]
     return None
 
 
@@ -28,15 +41,20 @@ def execute(isolatePath: str, id: int, problemId: int, timeLimit: int, memoryLim
     timeLimit *= LANGUAGE_REGISTRY[language]["time_multiplier"]
     memoryLimit *= LANGUAGE_REGISTRY[language]["memory_multiplier"]
 
-    cmd = (
-        f"isolate --box-id={id} "
-        f"--meta={metaPath} --stdout={outputPath} --stderr={errorPath} "
-        f"--time={timeLimit / 1000} --mem={memoryLimit * 1024} "
-        f"--run -- {LANGUAGE_REGISTRY[language]['execute'](id)} "
-        f"< {inputPath}"
-    )
+    cmd = [
+        "isolate",
+        f"--box-id={id}",
+        f"--meta={metaPath}",
+        f"--stdout={outputPath}",
+        f"--stderr={errorPath}",
+        f"--time={timeLimit / 1000}",
+        f"--mem={memoryLimit * 1024}",
+        "--run",
+        "--"
+    ] + LANGUAGE_REGISTRY[language]["execute"](id)
 
-    process = subprocess.Popen(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    with open(inputPath, "r") as inputFile:
+        process = subprocess.Popen(cmd, shell=False, text=True, stdin=inputFile, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     try:
         process.communicate(timeout=timeLimit / 1000 + 5)
@@ -106,7 +124,7 @@ def evaluate(isolatePath: str, id: int, problemId: int, timeLimit: int, memoryLi
     submission[id] = {
         "status": "Compiling",
     }
-    compileResult = compile(isolatePath, id, language)
+    compileResult = compile(id, language)
     if compileResult:
         submission[id] = {
             "score": 0,

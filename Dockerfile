@@ -27,4 +27,4 @@ RUN make --directory=isolate install
 
 COPY . .
 
-CMD ["fastapi", "run", "src/main.py"]
+CMD ["python", "src/worker.py"]

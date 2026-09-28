@@ -1,8 +1,5 @@
 import os
-import shutil
 import json
-from zipfile import ZipFile
-from fastapi import UploadFile
 from config.languages import LANGUAGE_REGISTRY
 
 
@@ -30,22 +27,6 @@ def removeFile(box: int):
 
     if not os.listdir(dir):
         os.rmdir(dir)
-
-
-def createTestcase(problemId: int, file: UploadFile):
-    if file.filename.split(".")[-1] != "zip":
-        return "Invalid file type"
-
-    if not os.path.exists("testcases"):
-        os.makedirs("testcases")
-
-    if os.path.exists(f"testcases/{problemId}"):
-        shutil.rmtree(f"testcases/{problemId}")
-
-    os.makedirs(f"testcases/{problemId}")
-
-    with ZipFile(file.file, "r") as zipFile:
-        zipFile.extractall(f"testcases/{problemId}")
 
 
 def extractRangeString(rangeString: str):

@@ -127,10 +127,6 @@ def finish(conn, job, score, result):
     This is the logic that used to live in actions/judge.ts. Doing both writes
     atomically is the point: a crash between them previously lost the grade.
     """
-    # score is a case count and integral by construction once DESIGN.md section 6
-    # lands. Until then the subtask path can yield a fraction, so coerce.
-    score = int(round(score))
-
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -142,9 +138,8 @@ def finish(conn, job, score, result):
             (score, Json(result), job.id),
         )
 
-        # Existing semantics, preserved deliberately: this is wrong for subtask
-        # problems, and DESIGN.md section 6 fixes it by making score a case count
-        # everywhere rather than by changing the comparison here.
+        # Correct on both paths now that score is a passed-case count: full
+        # marks means every case passed.
         is_accepted = score == job.testcases
 
         # The WHERE clause is the "only move forward" guard from the old code:

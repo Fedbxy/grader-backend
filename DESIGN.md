@@ -1,7 +1,7 @@
 # Grader Backend Redesign — Postgres as Queue
 
-Status: steps 1-4 implemented on branch `feat/db-queue` (both repos).
-Remaining: step 5 (cleanup) and step 6 (scoring unit fix + rejudge).
+Status: all six rollout steps implemented on branch `feat/db-queue` (both
+repos), verified against a local dev stack. Not yet deployed.
 
 ## Goal
 

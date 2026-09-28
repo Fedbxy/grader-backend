@@ -12,10 +12,11 @@ from isolate import readMetaFile
 class JudgeResult:
     """Outcome of grading one submission.
 
-    errorCode set means the submission never produced a score: CE is the
-    submitter's fault, JE is the judge's or the problem's.
+    score is a count of passed testcases. errorCode set means the submission
+    never produced a score: CE is the submitter's fault, JE is the judge's or
+    the problem's.
     """
-    score: float = 0
+    score: int = 0
     result: dict | None = None
     errorCode: str | None = None
     error: str | None = None
@@ -154,7 +155,11 @@ def evaluate(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memor
             "option": "sum",
         }]
 
-    total_score = 0
+    # score is the number of passed testcases, never a weighted total: it must
+    # stay independent of scoring policy so raising a problem's max score needs
+    # no rejudge. Weights travel in the result for the renderer to apply
+    # (DESIGN.md section 6).
+    passed_cases = set()
     scores = []
     verdicts = []
     times = []
@@ -163,6 +168,7 @@ def evaluate(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memor
 
     for subtask in subtask_cases:
         subtask_score = 0
+        subtask_passed = set()
         subtask_verdicts = []
         subtask_times = []
         subtask_memories = []
@@ -190,6 +196,7 @@ def evaluate(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memor
 
             if executeResult["verdict"] == "AC":
                 subtask_score += 1
+                subtask_passed.add(case)
                 if subtask["option"] == "max":
                     subtask_score = max(subtask_score, 0)
                 elif subtask["option"] == "min":
@@ -198,14 +205,18 @@ def evaluate(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memor
                 isSkipped = True
 
         if subtask["group"] and isSkipped:
+            # All-or-nothing: a failed group scores zero, so none of its cases
+            # count towards the total either.
             subtask_score = 0
+            subtask_passed.clear()
 
         if subtask_score == len(subtask["cases"]):
             requirePassed[int(subtask["id"]) - 1] = True
 
-        score = subtask_score / len(subtask["cases"]) * subtask["weight"]
-        total_score += score
-        scores.append(score)
+        # A case may appear in several subtasks (cumulative scoring), so union
+        # rather than sum: the total must not exceed the problem's case count.
+        passed_cases |= subtask_passed
+        scores.append(subtask_score)
         verdicts.append(subtask_verdicts)
         times.append(subtask_times)
         memories.append(subtask_memories)
@@ -214,7 +225,7 @@ def evaluate(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memor
 
     weights = [subtask["weight"] for subtask in subtask_cases]
     return JudgeResult(
-        score=total_score,
+        score=len(passed_cases),
         result={
             "scores": scores,
             "verdicts": verdicts,

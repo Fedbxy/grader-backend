@@ -323,15 +323,21 @@ the destination before extracting, and reject the archive otherwise.
 
 ```
 src/
-  main.py       entrypoint: config, pool, start listener + reaper + lanes
+  worker.py     entrypoint + lane loop: claim -> sync -> judge -> persist
   db.py         psycopg3 connection pool, LISTEN connection
-  queue.py      claim / finish / fail / requeue-on-startup
+  jobs.py       claim / progress / finish / fail / requeue-on-startup
   testcases.py  MinIO sync, version check, safe extraction
-  worker.py     lane loop: claim -> sync -> judge -> finalize
-  judge.py      grading core (logic unchanged)
+  judge.py      grading core (logic unchanged), returns a JudgeResult
   isolate.py    unchanged
   utils.py      loses createTestcase(), keeps the rest
-  config/
+  config/settings.py  environment configuration
+
+`jobs.py`, not `queue.py`: a module named `queue` in `src/` shadows the standard
+library's `queue`, which the legacy `que.py` imports until cutover.
+
+Extracted testcases live at `{root}/{problem_id}/{version}/`, so a sync never
+mutates a directory another lane is reading. `.ready` is written last — a
+directory without it is treated as incomplete and refetched.
 ```
 
 Changes to existing modules:

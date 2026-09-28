@@ -3,7 +3,7 @@ from typing import Annotated
 import threading
 
 from utils import createTestcase
-from judge import submission
+from que import submission
 import que
 
 

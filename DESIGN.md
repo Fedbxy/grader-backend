@@ -569,6 +569,20 @@ Ordered so the existing path keeps working until the last step.
    path on a set of known submissions.
 4. **Cut over**: deploy the worker, delete the FastAPI endpoints and `que.py`, drop port
    8000, remove the frontend's `fetch` calls and `getSubmission`.
+
+   **Clear the interim backlog first.** Between steps 1 and 4 the old HTTP path is still
+   grading, but every new submission takes the column default `'pending'` and
+   accumulates. Boot the worker on that and it regrades everything submitted since the
+   migration. Immediately before starting the worker:
+
+   ```sql
+   UPDATE submissions SET "judgeStatus" = 'done'
+   WHERE "judgeStatus" = 'pending' AND status IS NULL;
+   ```
+
+   The old path sets `status = NULL` when it finishes, on both the success and error
+   branches, so this marks exactly what was already graded and leaves genuinely
+   unfinished submissions for the worker to pick up.
 5. **Cleanup**: remove `BACKEND_*` env vars; optionally raise `LANES` with pinning.
 6. **Scoring unit fix** (§6) — drop the weight multiplication in `judge.py`, update the
    two renderers, then rejudge subtask problems. Deliberately last: rejudge-all is a

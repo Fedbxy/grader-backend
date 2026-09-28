@@ -36,7 +36,10 @@ def process(lane: int, job: jobs.Job):
         with db.pool.connection() as conn:
             jobs.progress(conn, job.id, status)
 
-    progress("In queue")
+    # Not "In queue": by this point the submission has been claimed and is no
+    # longer waiting. Fetching a cold 87MB archive takes seconds, so it gets its
+    # own status rather than leaving a stale queue message on screen.
+    progress("Preparing testcases")
 
     # Raises TestcaseError when the problem has no usable testcases, which no
     # amount of retrying fixes.

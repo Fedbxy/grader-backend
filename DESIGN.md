@@ -92,10 +92,25 @@ model Problem {
 
 ### Why `judgeStatus` is separate from `status`
 
-`status` is the human-readable progress string the UI renders ("Compiling", "Running on
-testcase 7") and is set to `NULL` when finished. It is presentation. `judgeStatus` is
-queue state and is the only thing the claim query looks at. Overloading one for the
-other is how queues develop unfixable race conditions — keep them separate.
+`status` is the human-readable progress string the UI renders and is set to `NULL` when
+finished. It is presentation. `judgeStatus` is queue state and is the only thing the
+claim query looks at. Overloading one for the other is how queues develop unfixable race
+conditions — keep them separate.
+
+The sequence a submitter sees:
+
+```
+"In queue" -> "Preparing testcases" -> "Compiling" -> "Running on testcase N" -> NULL
+```
+
+One label per state. Previously "Pending" and "In queue" both meant queued: rows were
+created with the column default "Pending", and the HTTP handshake overwrote it with
+"In queue" within ~500ms, so the first was a flicker nobody saw. The column default is
+now "In queue" and nothing writes "Pending".
+
+"Preparing testcases" covers the gap between claiming and compiling, where a cold cache
+pulls an archive from MinIO. It matters because that is seconds of work, and labelling
+it "In queue" would leave a stale and untrue message on screen.
 
 ### Migration must backfill
 

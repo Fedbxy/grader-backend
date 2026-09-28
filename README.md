@@ -21,8 +21,13 @@ The project is built with the following technologies.
 - [Cloudflare Turnstile](https://www.cloudflare.com/products/turnstile/): CAPTCHA
 
 ### Judge Server (Backend)
-- [FastAPI](https://fastapi.tiangolo.com/): Python Web Framework
 - [Isolate](https://github.com/ioi/isolate): Sandbox Environment
+- [PostgreSQL](https://www.postgresql.org/): Submission Queue
+- [MinIO](https://min.io/): Testcase Storage
+
+The judge exposes no HTTP interface. It claims submissions straight from the
+`submissions` table, fetches testcases from MinIO, and writes results back to
+the same row. See [DESIGN.md](./DESIGN.md).
 
 ### Deployment
 - [Docker](https://www.docker.com/): Containerization

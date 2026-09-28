@@ -597,6 +597,42 @@ Ordered so the existing path keeps working until the last step.
 Rollback for step 4 is a redeploy of the previous image — the new columns are additive
 and the old code ignores them.
 
+### Deploying to production
+
+The steps above were carried out against a local dev stack. Production needs the same
+sequence, plus two prerequisites that do not exist there.
+
+**Before merging to `main`.** `deploy.yml` runs `docker compose up -d --force-recreate`
+on every push to `main`, and the new `docker-compose.yml` reads variables the host's
+`.env` has never held. Compose substitutes empty strings for unset variables rather than
+failing, so the worker would start and be unable to reach Postgres. Add to
+`~/Desktop/grader-backend/.env` on the judge host (see `.env.template`):
+
+```
+POSTGRES_USER=  POSTGRES_PASSWORD=  POSTGRES_DB=
+S3_ACCESS_KEY=  S3_SECRET_KEY=  S3_BUCKET_NAME=
+LANES=1
+```
+
+**Testcases must reach MinIO before the worker starts.** Every production problem still
+has `testcaseVersion = NULL`, and `testcases.ensure()` refuses to guess: the worker would
+fail every submission with `JE: No testcases found`. `scripts/migrate_testcases.py` has
+to run on the judge host, where the volume, MinIO and the database are all reachable.
+
+Order:
+
+1. Apply the Prisma migration (frontend deploy).
+2. Run `migrate_testcases.py` on the judge host — dry run first, then `--apply`.
+   It reports any problem whose cases do not match `Problem.testcases`.
+3. Clear the interim backlog:
+   `UPDATE submissions SET "judgeStatus" = 'done' WHERE "judgeStatus" = 'pending' AND status IS NULL;`
+4. Merge the backend, which deploys the worker.
+
+Expect some old submissions to score differently after a rejudge. Python submissions
+graded before `time_multiplier` was introduced are the known case: locally, submission 1
+went from 0 to full marks, while the identical code submitted as pypy had always scored
+full.
+
 ## 8. Open decisions
 
 - **Cache eviction**: implement LRU now, or leave the cache unbounded (matching today's

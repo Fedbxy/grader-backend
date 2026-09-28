@@ -45,11 +45,12 @@ def listen(on_notify, stop):
             with psycopg.connect(settings.DATABASE_URL, autocommit=True) as conn:
                 conn.execute(f"LISTEN {settings.NOTIFY_CHANNEL}")
                 log.info("listening on %s", settings.NOTIFY_CHANNEL)
-                gen = conn.notifies(timeout=settings.POLL_INTERVAL)
-                for _ in gen:
-                    on_notify()
-                    if stop.is_set():
-                        gen.close()
+                while not stop.is_set():
+                    # Short timeout so stop is noticed promptly. The connection
+                    # is held across iterations; letting notifies() end the
+                    # `with` block would reconnect every timeout.
+                    for _ in conn.notifies(timeout=1.0):
+                        on_notify()
         except Exception:
             if stop.is_set():
                 return

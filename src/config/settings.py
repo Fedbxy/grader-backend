@@ -16,8 +16,9 @@ S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY", "")
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "")
 S3_USE_SSL = os.environ.get("S3_USE_SSL") == "true"
 
-# Local cache of testcases extracted from MinIO. Disposable: anything missing is
-# refetched on demand (DESIGN.md section 3).
+# The testcase volume. The cache of archives extracted from MinIO lives under
+# {TESTCASE_ROOT}/.cache and is disposable: anything missing is refetched on
+# demand (DESIGN.md section 3).
 TESTCASE_ROOT = os.environ.get("TESTCASE_ROOT", "testcases")
 
 # Concurrent submissions. Default 1 — raising this trades timing fidelity for

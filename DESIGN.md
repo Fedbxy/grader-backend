@@ -306,14 +306,26 @@ Before judging a submission for problem P:
 
 1. Read `testcaseVersion` from the DB (the worker already fetches the problem row for
    `timeLimit`/`memoryLimit`/`testcases`).
-2. Compare to `testcases/{P}/.version` on local disk. Match → judge immediately, no
+2. Look for `testcases/.cache/{P}/{version}/.ready`. Present → judge immediately, no
    network at all.
-3. Mismatch → take a per-problem lock file, download the object, extract to
-   `testcases/.tmp/{P}.{version}/`, write `.version` **last**, then atomically
-   `os.rename` into `testcases/{P}/` and delete the old directory.
+3. Absent → take a per-problem lock file, download the object, extract to
+   `testcases/.cache/.tmp/{P}.{version}/`, rename into
+   `testcases/.cache/{P}/{version}/`, write `.ready` **last**, and prune older versions
+   of that problem.
 
-The atomic rename is what prevents a lane reading a half-extracted problem while
-another lane syncs. The lock file prevents two lanes downloading the same 185 MB twice.
+The path is version-stamped rather than swapped in place, so a sync never mutates a
+directory another lane is reading mid-judge. `.ready` written last means a crash
+mid-extract leaves a directory that is refetched rather than trusted. The lock file
+prevents two lanes downloading the same archive twice.
+
+**The cache has its own namespace, `.cache/`, inside the testcases volume.** The volume
+also holds the legacy flat layout (`{P}/1.in`) that `migrate_testcases.py` reads. An
+earlier build cached into those same directories, which broke the migration twice over:
+the script swept cached copies into its archives (a re-run doubled problem 1 from 21
+files to 43, and would compound on every run), and pruning deleted any subdirectory of
+a legacy problem that wasn't the current version. Keeping the two trees apart makes the
+migration and the worker order-independent. The script also ignores dot-entries and
+64-hex directories, so it stays idempotent on a volume an earlier build polluted.
 
 Disk: 185 MB in MinIO + 185 MB extracted per judge host, with a transient ~3× for a
 single problem mid-sync. Nothing accumulates across versions.
@@ -346,14 +358,10 @@ src/
   isolate.py    unchanged
   utils.py      loses createTestcase(), keeps the rest
   config/settings.py  environment configuration
+```
 
 `jobs.py`, not `queue.py`: a module named `queue` in `src/` shadows the standard
-library's `queue`, which the legacy `que.py` imports until cutover.
-
-Extracted testcases live at `{root}/{problem_id}/{version}/`, so a sync never
-mutates a directory another lane is reading. `.ready` is written last — a
-directory without it is treated as incomplete and refetched.
-```
+library's `queue`, which the legacy `que.py` imported until cutover.
 
 Changes to existing modules:
 

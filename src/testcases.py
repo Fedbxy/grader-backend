@@ -3,9 +3,9 @@
 The DB holds Problem.testcaseVersion; the worker compares it against what it has
 extracted and refetches only on a mismatch (DESIGN.md section 3).
 
-Extracted content lives at {root}/{problem_id}/{version}/ rather than being
-swapped in place. A version-stamped path means a sync never mutates a directory
-another lane is reading mid-judge.
+Extracted content lives at {root}/.cache/{problem_id}/{version}/ rather than
+being swapped in place. A version-stamped path means a sync never mutates a
+directory another lane is reading mid-judge.
 """
 
 import fcntl
@@ -68,7 +68,11 @@ def ensure(problem_id: int, version: str | None) -> Path:
     if not version:
         raise TestcaseError("No testcases found")
 
-    root = Path(settings.TESTCASE_ROOT)
+    # A namespace of its own inside the volume. The volume also holds the
+    # legacy flat layout ({problem_id}/1.in) that migrate_testcases.py reads;
+    # caching into those directories made the migration sweep cached copies
+    # into its archives, and let pruning delete legacy subdirectories.
+    root = Path(settings.TESTCASE_ROOT) / ".cache"
     target = root / str(problem_id) / version
     if (target / ".ready").exists():
         return target

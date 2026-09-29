@@ -15,6 +15,7 @@ S3_BUCKET_NAME, and optionally TESTCASE_ROOT (default /testcases).
 import hashlib
 import io
 import os
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -24,10 +25,24 @@ from minio import Minio
 
 TESTCASE_ROOT = Path(os.environ.get("TESTCASE_ROOT", "/testcases"))
 
-# __MACOSX is an artifact of zips built on macOS; .DS_Store likewise. Neither is
-# read by the judge. Everything else is preserved as uploaded, including helper
-# files such as transform.py, since only the author knows whether they matter.
-SKIP_NAMES = {"__MACOSX", ".DS_Store"}
+# __MACOSX is an artifact of zips built on macOS. Everything else is preserved
+# as uploaded, including helper files such as transform.py, since only the
+# author knows whether they matter.
+SKIP_NAMES = {"__MACOSX"}
+
+# A worker built before the cache moved to .cache/ extracted archives into
+# {problem_id}/{sha256}/ directly beside the legacy files. Excluding those, and
+# dot-entries (.ready, .DS_Store), keeps this script idempotent on a volume the
+# worker has already run against.
+VERSION_DIR = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _is_legacy_content(relative: Path) -> bool:
+    parts = relative.parts
+    return not any(
+        part in SKIP_NAMES or part.startswith(".") or VERSION_DIR.match(part)
+        for part in parts
+    )
 
 
 def build_archive(problem_dir: Path):
@@ -39,7 +54,7 @@ def build_archive(problem_dir: Path):
     """
     members = sorted(
         p for p in problem_dir.rglob("*")
-        if p.is_file() and not any(part in SKIP_NAMES for part in p.relative_to(problem_dir).parts)
+        if p.is_file() and _is_legacy_content(p.relative_to(problem_dir))
     )
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:

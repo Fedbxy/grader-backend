@@ -149,8 +149,12 @@ def main():
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
 
-    if not settings.DATABASE_URL:
-        raise SystemExit("DATABASE_URL is not set")
+    missing = settings.missing()
+    if missing:
+        raise SystemExit(
+            "missing configuration: " + ", ".join(missing)
+            + " — set these in the judge's .env (see .env.template)"
+        )
 
     def shutdown(*_):
         log.info("shutting down; in-flight submissions will be requeued on next start")
@@ -162,8 +166,24 @@ def main():
 
     db.open_pool()
 
-    with db.pool.connection() as conn:
-        jobs.requeue_abandoned(conn)
+    # Wait for the database rather than crashing. Postgres may still be starting
+    # (the frontend's deploy recreates it), or its schema may not be migrated
+    # yet if this deploys before the frontend. Crashing would hand the wait to
+    # Docker's restart backoff, which grows with every failure.
+    while not stop.is_set():
+        try:
+            with db.pool.connection() as conn:
+                jobs.requeue_abandoned(conn)
+            break
+        except Exception as error:
+            log.warning("waiting for the database: %s", str(error).strip().splitlines()[0])
+            stop.wait(settings.POLL_INTERVAL)
+
+    if stop.is_set():
+        db.close_pool()
+        return
+
+    log.info("connected to postgres")
 
     listener = threading.Thread(
         target=db.listen, args=(wakeup.set, stop), daemon=True, name="listener")

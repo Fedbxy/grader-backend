@@ -42,3 +42,29 @@ OUTPUT_LIMIT_KB = int(os.environ.get("OUTPUT_LIMIT_KB", str(64 * 1024)))
 WORKER_ID = os.environ.get("WORKER_ID", socket.gethostname())
 
 NOTIFY_CHANNEL = "submission_queued"
+
+
+def missing():
+    """Names of required settings that are absent, for a readable startup error.
+
+    DATABASE_URL is assembled by docker-compose from POSTGRES_*, so unset
+    variables do not leave it empty — they leave it malformed
+    (postgresql://:@postgres-db:5432/), which otherwise surfaces only as a
+    connection traceback in a restart loop.
+    """
+    from urllib.parse import urlparse
+
+    names = []
+    url = urlparse(DATABASE_URL)
+    if not url.username:
+        names.append("POSTGRES_USER")
+    if not url.password:
+        names.append("POSTGRES_PASSWORD")
+    if url.path in ("", "/"):
+        names.append("POSTGRES_DB")
+    for name, value in (("S3_ACCESS_KEY", S3_ACCESS_KEY),
+                        ("S3_SECRET_KEY", S3_SECRET_KEY),
+                        ("S3_BUCKET_NAME", S3_BUCKET_NAME)):
+        if not value:
+            names.append(name)
+    return names

@@ -28,6 +28,13 @@ class TestcaseError(Exception):
     """Testcases are unusable for this problem. Retrying will not help."""
 
 
+# testcaseVersion of every problem that existed before the switch-over to the DB
+# queue, set once by the frontend's mark_legacy_testcases migration. Only these
+# are served from the volume's legacy layout. Real versions are hex digests, so
+# this cannot collide with one.
+LEGACY = "legacy"
+
+
 _client = None
 
 
@@ -66,7 +73,12 @@ def ensure(problem_id: int, version: str | None) -> Path:
 
     Downloads and extracts only when the local cache does not already have it.
     """
+    if version == LEGACY:
+        return _legacy(problem_id)
     if not version:
+        # Created after the switch-over and never given testcases. Deliberately
+        # not a legacy lookup: a directory named after this id could belong to a
+        # deleted problem, and judging against it would be silently wrong.
         raise TestcaseError("No testcases found")
 
     # A namespace of its own inside the volume. The volume also holds the
@@ -126,6 +138,24 @@ def ensure(problem_id: int, version: str | None) -> Path:
         _prune_old_versions(target.parent, version)
         log.info("testcases ready for problem %s (%.1f MB)", problem_id, len(data) / 1024 / 1024)
         return target
+
+
+def _legacy(problem_id: int) -> Path:
+    """Testcases for a problem that has never been published to MinIO.
+
+    Problems that existed before the DB queue are marked LEGACY; their files sit
+    in the volume's flat layout, exactly where the old judge read them. Serving
+    those keeps the switch-over from depending on the MinIO migration.
+    scripts/migrate_testcases.py moves them to MinIO whenever convenient, after
+    which the version is a real digest and this path is no longer taken.
+
+    Safe to read in place: nothing writes to the legacy layout any more, since
+    new uploads go to MinIO.
+    """
+    legacy = Path(settings.TESTCASE_ROOT) / str(problem_id)
+    if legacy.is_dir() and any(legacy.glob("*.in")):
+        return legacy
+    raise TestcaseError("No testcases found")
 
 
 def _prune_old_versions(problem_dir: Path, current: str):

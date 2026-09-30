@@ -635,54 +635,54 @@ and the old code ignores them.
 
 ### Deploying to production
 
-The steps above were carried out against a local dev stack. Production needs the same
-sequence, plus two prerequisites that do not exist there.
+Both repos deploy automatically on merge to `main`. The deploy is built so that merging
+is the whole procedure, with one exception.
 
-**Before merging to `main`.** `deploy.yml` runs `docker compose up -d --force-recreate`
-on every push to `main`, and the new `docker-compose.yml` reads variables the host's
-`.env` has never held. Compose substitutes empty strings for unset variables rather than
-failing, so the worker would start and be unable to reach Postgres. Add to
-`~/Desktop/grader-backend/.env` on the judge host (see `.env.template`):
+**Before merging, give the judge its credentials** — the only thing code can't supply.
+It has never needed Postgres or MinIO before. The frontend's `.env` on the same host
+already holds the values under the same names:
 
 ```
-POSTGRES_USER=  POSTGRES_PASSWORD=  POSTGRES_DB=
-S3_ACCESS_KEY=  S3_SECRET_KEY=  S3_BUCKET_NAME=
-LANES=1
+cd ~/Desktop/grader-backend && grep -E '^(POSTGRES_USER|POSTGRES_PASSWORD|POSTGRES_DB|S3_ACCESS_KEY|S3_SECRET_KEY|S3_BUCKET_NAME)=' ../grader/.env >> .env
 ```
 
-**Testcases must reach MinIO before the worker starts.** Every production problem still
-has `testcaseVersion = NULL`, and `testcases.ensure()` refuses to guess: the worker would
-fail every submission with `JE: No testcases found`. `scripts/migrate_testcases.py` has
-to run on the judge host, where the volume, MinIO and the database are all reachable.
+If this is missed, the judge exits with `missing configuration: <names>` rather than a
+connection traceback. `deploy.yml`'s `git reset --hard` leaves the untracked `.env`
+alone.
 
-Runbook (each step verified against the local stack):
+**Then merge grader#33, then grader-backend#8.** What each deploy does on its own:
 
-1. **On the judge host**, add the variables above to `~/Desktop/grader-backend/.env`,
-   with `LANES=0`. The worker will deploy paused: running, connected, grading nothing.
-   (`deploy.yml`'s `git reset --hard` leaves the untracked `.env` alone.)
-2. **Merge grader#33.** The frontend container runs `prisma migrate deploy` on startup,
-   so both migrations apply as it comes up. From here submissions queue but nothing
-   grades them — the new frontend no longer calls the old judge. Keep this window short;
-   nothing queued is lost.
-3. **Merge grader-backend#8.** The worker deploys with zero lanes.
-4. **Migrate testcases** on the judge host, using the image that just deployed (it has
-   the dependencies; the old one does not). Dry run first, then `--apply`:
+- The frontend container runs `prisma migrate deploy` on startup, applying:
+  - `db_queue` — the queue columns, marking all existing submissions `done`;
+  - `queued_status_label` — the `'In queue'` default;
+  - `requeue_unfinished` — requeues submissions the old judge never finished: in flight
+    at cutover, or stranded long ago by the in-memory queue. A finished row always has
+    `status` NULL, so a `done` row with a status was never graded;
+  - `mark_legacy_testcases` — sets `testcaseVersion = 'legacy'` on every existing
+    problem.
+- The worker serves `legacy` problems from the volume's flat layout, exactly where the
+  old judge read them. **Migrating testcases to MinIO is not a deploy step.** A problem
+  created after the switch has no fallback: an id-named directory on the volume could
+  belong to a deleted problem (ids restart if the database is ever reset while the
+  volume survives — observed in dev, where a new problem collided with a deleted one's
+  files).
+- The worker waits for the database instead of crashing, so it tolerates Postgres being
+  recreated by the frontend's deploy (`--force-recreate` restarts it every time) and
+  even deploying before the frontend's migrations have run.
 
-   ```
-   docker compose run --rm -e TESTCASE_ROOT=/app/testcases backend python scripts/migrate_testcases.py
-   ```
+Between the two merges, submissions queue as `In queue` and nothing grades them — the
+new frontend no longer calls the old judge. Nothing is lost; merge the second soon after
+the first.
 
-5. **Requeue anything the old judge left unfinished.** The migration marked every
-   existing row `done`, including ones the old judge was still grading at cutover, or had
-   stranded earlier. Their `status` is still non-NULL, which a finished row never has:
+**Afterwards, whenever convenient**, move testcases into MinIO so the volume becomes a
+disposable cache. Run on the judge host, dry run first, then again with `--apply`:
 
-   ```sql
-   UPDATE submissions SET "judgeStatus" = 'pending', priority = 1
-   WHERE "judgeStatus" = 'done' AND status IS NOT NULL;
-   ```
+```
+docker compose run --rm -e TESTCASE_ROOT=/app/testcases backend python scripts/migrate_testcases.py
+```
 
-6. **Unpause:** set `LANES=1` and run `docker compose up -d`. Everything queued since
-   step 2 is graded, live submissions ahead of the requeued ones.
+It replaces each `legacy` marker with a real version. It reproduces the same archives
+byte for byte, so verdicts do not change.
 
 Expect some old submissions to score differently after a rejudge. Python submissions
 graded before `time_multiplier` was introduced are the known case: locally, submission 1

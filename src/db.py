@@ -27,9 +27,9 @@ pool = ConnectionPool(
 
 
 def open_pool():
-    pool.open()
-    pool.wait(timeout=30)
-    log.info("connected to postgres (pool size %d)", settings.LANES + 1)
+    # Connects in the background rather than failing if Postgres is not up yet:
+    # the worker's startup loop waits for it instead.
+    pool.open(wait=False)
 
 
 def close_pool():

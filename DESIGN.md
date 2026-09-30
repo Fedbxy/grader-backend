@@ -655,14 +655,34 @@ has `testcaseVersion = NULL`, and `testcases.ensure()` refuses to guess: the wor
 fail every submission with `JE: No testcases found`. `scripts/migrate_testcases.py` has
 to run on the judge host, where the volume, MinIO and the database are all reachable.
 
-Order:
+Runbook (each step verified against the local stack):
 
-1. Apply the Prisma migration (frontend deploy).
-2. Run `migrate_testcases.py` on the judge host — dry run first, then `--apply`.
-   It reports any problem whose cases do not match `Problem.testcases`.
-3. Clear the interim backlog:
-   `UPDATE submissions SET "judgeStatus" = 'done' WHERE "judgeStatus" = 'pending' AND status IS NULL;`
-4. Merge the backend, which deploys the worker.
+1. **On the judge host**, add the variables above to `~/Desktop/grader-backend/.env`,
+   with `LANES=0`. The worker will deploy paused: running, connected, grading nothing.
+   (`deploy.yml`'s `git reset --hard` leaves the untracked `.env` alone.)
+2. **Merge grader#33.** The frontend container runs `prisma migrate deploy` on startup,
+   so both migrations apply as it comes up. From here submissions queue but nothing
+   grades them — the new frontend no longer calls the old judge. Keep this window short;
+   nothing queued is lost.
+3. **Merge grader-backend#8.** The worker deploys with zero lanes.
+4. **Migrate testcases** on the judge host, using the image that just deployed (it has
+   the dependencies; the old one does not). Dry run first, then `--apply`:
+
+   ```
+   docker compose run --rm -e TESTCASE_ROOT=/app/testcases backend python scripts/migrate_testcases.py
+   ```
+
+5. **Requeue anything the old judge left unfinished.** The migration marked every
+   existing row `done`, including ones the old judge was still grading at cutover, or had
+   stranded earlier. Their `status` is still non-NULL, which a finished row never has:
+
+   ```sql
+   UPDATE submissions SET "judgeStatus" = 'pending', priority = 1
+   WHERE "judgeStatus" = 'done' AND status IS NOT NULL;
+   ```
+
+6. **Unpause:** set `LANES=1` and run `docker compose up -d`. Everything queued since
+   step 2 is graded, live submissions ahead of the requeued ones.
 
 Expect some old submissions to score differently after a rejudge. Python submissions
 graded before `time_multiplier` was introduced are the known case: locally, submission 1

@@ -33,6 +33,12 @@ POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "2.0"))
 # marked failed, so it cannot occupy the queue forever (DESIGN.md section 2).
 MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
 
+# Largest file a submission may write, in KB — its stdout included. The judge
+# reads a submission's whole output into memory, so without a cap a program that
+# prints in a loop could write gigabytes and take the worker down with it. The
+# largest expected output on record is 2.8 MB.
+OUTPUT_LIMIT_KB = int(os.environ.get("OUTPUT_LIMIT_KB", str(64 * 1024)))
+
 WORKER_ID = os.environ.get("WORKER_ID", socket.gethostname())
 
 NOTIFY_CHANNEL = "submission_queued"

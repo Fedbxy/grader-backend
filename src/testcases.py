@@ -17,6 +17,7 @@ import zipfile
 from pathlib import Path
 
 from minio import Minio
+from minio.error import S3Error
 
 from config import settings
 
@@ -97,8 +98,16 @@ def ensure(problem_id: int, version: str | None) -> Path:
             finally:
                 response.close()
                 response.release_conn()
-        except Exception as error:
-            raise TestcaseError(f"Could not fetch testcases: {error}") from error
+        except S3Error as error:
+            if error.code == "NoSuchKey":
+                # The database names a version that storage does not have.
+                # Permanent until someone re-uploads, so fail the submission.
+                raise TestcaseError("Testcase archive is missing from storage") from error
+            raise
+        # Anything else (MinIO restarting, a network blip) propagates as an
+        # ordinary error, which the worker retries with backoff. Treating it as
+        # a TestcaseError would permanently fail every submission that arrived
+        # during a brief outage.
 
         staging = root / ".tmp" / f"{problem_id}.{version}"
         if staging.exists():

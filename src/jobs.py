@@ -191,11 +191,16 @@ def fail(conn, submission_id, error_code, message):
 
 
 def release(conn, submission_id):
-    """Put a submission back in the queue after an unexpected failure."""
+    """Put a submission back in the queue after an unexpected failure.
+
+    Only a row still marked 'judging' is released. After a database outage the
+    lane cannot know whether its last write landed; if it did, the row is
+    already 'done' and must not be requeued.
+    """
     with conn.cursor() as cur:
         cur.execute(
             'UPDATE submissions SET "judgeStatus" = \'pending\', "updatedAt" = now() '
-            "WHERE id = %s",
+            "WHERE id = %s AND \"judgeStatus\" = 'judging'",
             (submission_id,),
         )
     conn.commit()

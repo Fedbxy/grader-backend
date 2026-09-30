@@ -391,22 +391,35 @@ Two bugs this fixes:
   from service. Under the new design, an escaped exception marks the row failed and
   releases the lane; `--wall-time` is passed as defence in depth.
 
-### Unbounded output read
+### Output size cap
 
-`judge.py:66` reads a submission's entire stdout into memory:
+`judge.py` reads a submission's entire stdout into memory, and isolate was never given
+`--fsize`, so a program printing in a loop could write gigabytes and the worker would
+then load them into RAM. Every run now passes `--fsize=OUTPUT_LIMIT_KB` (default 64 MB,
+~23x the largest expected output on record, 2.8 MB). A submission that exceeds it is
+killed by `SIGXFSZ` and scores `RE`. Verified with an infinite 1 MB `fwrite` loop: `RE`
+in 0.7 s, worker memory unaffected.
 
-```python
-output = open(f"{isolatePath}/{outputPath}").read()
-```
+### Surviving outages
 
-`execute()` never passes isolate's `--fsize`, so a program printing in a loop grows that
-file until the disk fills, and the worker then tries to load it into RAM. The result is
-an OOM-killed worker — which, combined with `restart: unless-stopped`, is the crash loop
-`attempts` exists to break (§2).
+The judge now depends on Postgres and MinIO at runtime, which the HTTP design never did,
+so their routine restarts must not take grading down.
 
-Fix both ends: pass `--fsize` to cap what a submission can write, and read the output
-with a size limit rather than `.read()`. A submission whose output exceeds the cap is a
-WA (or an explicit output-limit verdict), not a judge failure.
+- **A lane never exits on an error.** Every iteration of `lane_loop` is guarded. Before
+  this, the claim call sat outside any `try`: a single Postgres restart killed the only
+  lane while the container kept running and looked healthy — observed, not theoretical.
+- **The pool checks connections before handing them out**, so a short Postgres restart
+  is absorbed: writes wait for the database to return instead of failing. Observed
+  mid-grade with no error and no retry.
+- **Outages longer than the pool's 30 s wait** leave the lane holding a claimed job it
+  cannot write back. It keeps that job and hands it back as soon as the database
+  returns, instead of leaving it in `judging` until the next restart. Database errors
+  are never recorded against the submission.
+- **MinIO errors are retried**, with backoff so a short outage doesn't exhaust every
+  attempt within a second. Only a genuinely missing archive (`NoSuchKey`) fails the
+  submission. Previously any fetch error failed it permanently.
+- **If a lane does die anyway**, the main loop exits so `restart: unless-stopped` brings
+  the container back and startup requeue recovers the work.
 
 ### On running multiple lanes on one machine
 

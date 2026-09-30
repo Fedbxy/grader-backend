@@ -9,7 +9,10 @@ lane that is never notified still claims on its poll interval.
 
 import logging
 import signal
+import sys
 import threading
+
+import psycopg
 
 import db
 import jobs
@@ -70,34 +73,74 @@ def process(lane: int, job: jobs.Job):
     log.info("submission %s judged (score %s)", job.id, outcome.score)
 
 
-def lane_loop(lane: int):
-    log.info("lane %d ready", lane)
-    while not stop.is_set():
+def handle(lane: int, job: jobs.Job):
+    """Grade a claimed job, turning judge-side failures into a recorded outcome.
+
+    Database errors are re-raised rather than recorded: they say nothing about
+    the submission, so they must not count against it. lane_loop hands the job
+    back once the database is reachable again.
+    """
+    try:
+        process(lane, job)
+    except psycopg.Error:
+        raise
+    except TestcaseError as error:
+        log.warning("submission %s: %s", job.id, error)
         with db.pool.connection() as conn:
-            job = jobs.claim(conn)
+            jobs.fail(conn, job.id, "JE", str(error))
+    except Exception as error:
+        # Unexpected: could be transient (MinIO briefly down, a wedged isolate).
+        # Retry until attempts run out, then give up rather than letting one
+        # submission occupy the queue forever.
+        log.exception("submission %s failed on attempt %d", job.id, job.attempts)
+        with db.pool.connection() as conn:
+            if job.attempts >= settings.MAX_ATTEMPTS:
+                jobs.fail(conn, job.id, "SE", str(error))
+                return
+            jobs.release(conn, job.id)
+        # Back off before the lane claims again — the released job is still
+        # first in line, so without a pause every retry lands within a second
+        # and a brief outage exhausts all of them.
+        stop.wait(settings.POLL_INTERVAL * job.attempts)
 
-        if job is None:
-            wakeup.wait(settings.POLL_INTERVAL)
-            wakeup.clear()
-            continue
 
-        log.info("lane %d claimed submission %s (attempt %d)", lane, job.id, job.attempts)
+def lane_loop(lane: int):
+    """Claim and grade until stopped. Nothing may end this loop but stop.
+
+    A lane thread that dies takes its capacity with it while the container stays
+    up and looks healthy — at LANES=1 that is all grading, silently. So every
+    iteration is guarded, and a database outage is waited out rather than fatal.
+    """
+    log.info("lane %d ready", lane)
+
+    # A job this lane claimed but could not hand back because the database was
+    # unreachable. Released first thing once the database returns; otherwise it
+    # would sit in 'judging' until the next restart.
+    stranded = None
+
+    while not stop.is_set():
         try:
-            process(lane, job)
-        except TestcaseError as error:
-            log.warning("submission %s: %s", job.id, error)
+            if stranded is not None:
+                with db.pool.connection() as conn:
+                    jobs.release(conn, stranded.id)
+                log.info("lane %d handed back submission %s after the database recovered", lane, stranded.id)
+                stranded = None
+
             with db.pool.connection() as conn:
-                jobs.fail(conn, job.id, "JE", str(error))
-        except Exception as error:
-            # Unexpected: could be transient (a restart mid-grade, a wedged
-            # isolate). Retry until attempts run out, then give up rather than
-            # letting one submission occupy the queue forever.
-            log.exception("submission %s failed on attempt %d", job.id, job.attempts)
-            with db.pool.connection() as conn:
-                if job.attempts >= settings.MAX_ATTEMPTS:
-                    jobs.fail(conn, job.id, "SE", str(error))
-                else:
-                    jobs.release(conn, job.id)
+                job = jobs.claim(conn)
+
+            if job is None:
+                wakeup.wait(settings.POLL_INTERVAL)
+                wakeup.clear()
+                continue
+
+            log.info("lane %d claimed submission %s (attempt %d)", lane, job.id, job.attempts)
+            stranded = job
+            handle(lane, job)
+            stranded = None
+        except Exception:
+            log.exception("lane %d: database unavailable, retrying", lane)
+            stop.wait(settings.POLL_INTERVAL)
 
 
 def main():
@@ -136,6 +179,12 @@ def main():
     log.info("worker %s up with %d lane(s)", settings.WORKER_ID, settings.LANES)
 
     while not stop.is_set():
+        # Lanes are built not to die, so a dead one means a bug nothing caught.
+        # Exit rather than run on with less capacity than configured: the
+        # container restarts, and startup requeue recovers the in-flight work.
+        if not all(lane.is_alive() for lane in lanes):
+            log.error("a lane stopped unexpectedly; exiting so the container restarts")
+            sys.exit(1)
         stop.wait(1)
 
     for lane in lanes:

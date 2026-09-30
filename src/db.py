@@ -19,6 +19,9 @@ pool = ConnectionPool(
     settings.DATABASE_URL,
     min_size=1,
     max_size=settings.LANES + 1,
+    # Verify a connection before handing it out. Without this, a Postgres
+    # restart leaves dead connections in the pool that fail on first use.
+    check=ConnectionPool.check_connection,
     open=False,
 )
 

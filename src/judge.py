@@ -3,6 +3,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from config import settings
 from config.languages import LANGUAGE_REGISTRY
 from utils import normalizeOutput, removeFile, readSubtask
 from isolate import readMetaFile
@@ -63,6 +64,7 @@ def execute(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memory
         f"--time={timeLimit / 1000}",
         f"--wall-time={timeLimit / 1000 + 5}",
         f"--mem={memoryLimit * 1024}",
+        f"--fsize={settings.OUTPUT_LIMIT_KB}",
         "--run",
         "--"
     ] + LANGUAGE_REGISTRY[language]["execute"](box)

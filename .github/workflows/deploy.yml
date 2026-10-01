@@ -94,8 +94,15 @@ jobs:
               grep -q "^$key=" .env || grep "^$key=" ../grader/.env >> .env || echo "warning: $key not found in ../grader/.env"
             done
 
+            # Deploy the image CI just built. The host's .env names it without
+            # its owner (ghcr.io/grader-backend), which GHCR rejects as "name
+            # invalid"; compose then quietly reuses whatever stale image is
+            # cached here. Exported variables take precedence over .env.
+            export REGISTRY=ghcr.io
+            export IMAGE_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+
             docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
-            docker compose pull
+            docker compose pull || { echo "pull failed; not deploying"; exit 1; }
             docker compose up -d --force-recreate
             docker image prune -f
 

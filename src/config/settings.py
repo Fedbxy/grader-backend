@@ -1,0 +1,70 @@
+"""Worker configuration, all from the environment.
+
+Defaults match the current single-host deployment, so the worker runs with
+nothing set but DATABASE_URL and the S3_* credentials.
+"""
+
+import os
+import socket
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+S3_ENDPOINT = os.environ.get("S3_ENDPOINT", "localhost")
+S3_PORT = os.environ.get("S3_PORT", "9001")
+S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY", "")
+S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY", "")
+S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "")
+S3_USE_SSL = os.environ.get("S3_USE_SSL") == "true"
+
+# The testcase volume. The cache of archives extracted from MinIO lives under
+# {TESTCASE_ROOT}/.cache and is disposable: anything missing is refetched on
+# demand (DESIGN.md section 3).
+TESTCASE_ROOT = os.environ.get("TESTCASE_ROOT", "testcases")
+
+# Concurrent submissions. Default 1 — raising this trades timing fidelity for
+# throughput, and wants taskset pinning per lane (DESIGN.md section 4).
+LANES = int(os.environ.get("LANES", "1"))
+
+# Fallback poll interval. NOTIFY normally wakes the worker sooner; this is what
+# makes correctness independent of notification delivery.
+POLL_INTERVAL = float(os.environ.get("POLL_INTERVAL", "2.0"))
+
+# A submission that kills the worker is retried this many times before being
+# marked failed, so it cannot occupy the queue forever (DESIGN.md section 2).
+MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
+
+# Largest file a submission may write, in KB — its stdout included. The judge
+# reads a submission's whole output into memory, so without a cap a program that
+# prints in a loop could write gigabytes and take the worker down with it. The
+# largest expected output on record is 2.8 MB.
+OUTPUT_LIMIT_KB = int(os.environ.get("OUTPUT_LIMIT_KB", str(64 * 1024)))
+
+WORKER_ID = os.environ.get("WORKER_ID", socket.gethostname())
+
+NOTIFY_CHANNEL = "submission_queued"
+
+
+def missing():
+    """Names of required settings that are absent, for a readable startup error.
+
+    DATABASE_URL is assembled by docker-compose from POSTGRES_*, so unset
+    variables do not leave it empty — they leave it malformed
+    (postgresql://:@postgres-db:5432/), which otherwise surfaces only as a
+    connection traceback in a restart loop.
+    """
+    from urllib.parse import urlparse
+
+    names = []
+    url = urlparse(DATABASE_URL)
+    if not url.username:
+        names.append("POSTGRES_USER")
+    if not url.password:
+        names.append("POSTGRES_PASSWORD")
+    if url.path in ("", "/"):
+        names.append("POSTGRES_DB")
+    for name, value in (("S3_ACCESS_KEY", S3_ACCESS_KEY),
+                        ("S3_SECRET_KEY", S3_SECRET_KEY),
+                        ("S3_BUCKET_NAME", S3_BUCKET_NAME)):
+        if not value:
+            names.append(name)
+    return names

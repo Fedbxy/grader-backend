@@ -12,7 +12,10 @@ env:
 jobs:
   build-and-push-image:
     name: Build and Push Docker Image
-    runs-on: ubuntu-latest
+    # The production host is arm64, and images built on ubuntu-latest are
+    # amd64-only: the host could never pull them ("no matching manifest for
+    # linux/arm64/v8"), so deploys silently ran images built on the host.
+    runs-on: ubuntu-24.04-arm
 
     permissions:
       contents: read
@@ -83,7 +86,35 @@ jobs:
             cd ~/Desktop/grader-backend
             git fetch origin main
             git reset --hard origin/main
+
+            # The judge reads Postgres and MinIO directly, with the same
+            # credentials the frontend uses. Copy any it lacks from the
+            # frontend's .env on this host. Values go file to file and are
+            # never printed: this repository's logs are public.
+            touch .env
+            [ -z "$(tail -c1 .env)" ] || echo >> .env
+            for key in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET_NAME; do
+              grep -q "^$key=" .env || grep "^$key=" ../grader/.env >> .env || echo "warning: $key not found in ../grader/.env"
+            done
+
+            # Deploy the image CI just built. The host's .env names it without
+            # its owner (ghcr.io/grader-backend), which GHCR rejects as "name
+            # invalid"; compose then quietly reuses whatever stale image is
+            # cached here. Exported variables take precedence over .env.
+            export REGISTRY=ghcr.io
+            export IMAGE_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+
             docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
-            docker compose pull
+            docker compose pull || { echo "pull failed; not deploying"; exit 1; }
             docker compose up -d --force-recreate
             docker image prune -f
+
+            # Fail the deploy if the judge does not come up. Only fixed status
+            # text is printed — the worker's own log can contain connection
+            # details, and these logs are public.
+            for i in $(seq 1 30); do
+              docker logs grader-backend 2>&1 | grep -q "up with" && break
+              sleep 2
+            done
+            docker logs grader-backend 2>&1 | grep -oE "up with [0-9]+ lane\(s\)|missing configuration: [A-Z0-9_, ]+" | tail -1
+            docker logs grader-backend 2>&1 | grep -q "up with" || { echo "judge did not come up; on the host run: docker logs grader-backend"; exit 1; }

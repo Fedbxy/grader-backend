@@ -1,8 +1,5 @@
 import os
-import shutil
 import json
-from zipfile import ZipFile
-from fastapi import UploadFile
 from config.languages import LANGUAGE_REGISTRY
 
 
@@ -12,8 +9,8 @@ def normalizeOutput(output: str):
     return ("\n".join(normalizedLines)).strip()
 
 
-def createFile(isolatePath: str, id: int, language: str, code: str):
-    path = f"{isolatePath}/{id}.{LANGUAGE_REGISTRY[language]['extension']}"
+def createFile(isolatePath: str, box: int, language: str, code: str):
+    path = f"{isolatePath}/{box}.{LANGUAGE_REGISTRY[language]['extension']}"
 
     with open(path, "w") as file:
         file.write(code)
@@ -21,8 +18,8 @@ def createFile(isolatePath: str, id: int, language: str, code: str):
     return path
 
 
-def removeFile(id: int):
-    meta = f"tmp/{id}.meta"
+def removeFile(box: int):
+    meta = f"tmp/{box}.meta"
     dir = os.path.dirname(meta)
 
     if os.path.exists(meta):
@@ -30,22 +27,6 @@ def removeFile(id: int):
 
     if not os.listdir(dir):
         os.rmdir(dir)
-
-
-def createTestcase(problemId: int, file: UploadFile):
-    if file.filename.split(".")[-1] != "zip":
-        return "Invalid file type"
-
-    if not os.path.exists("testcases"):
-        os.makedirs("testcases")
-
-    if os.path.exists(f"testcases/{problemId}"):
-        shutil.rmtree(f"testcases/{problemId}")
-
-    os.makedirs(f"testcases/{problemId}")
-
-    with ZipFile(file.file, "r") as zipFile:
-        zipFile.extractall(f"testcases/{problemId}")
 
 
 def extractRangeString(rangeString: str):
@@ -95,11 +76,11 @@ def extractSubtask(data: dict, testcaseCount: int):
     return {"data": subtasks}
 
 
-def readSubtask(problemId: int, testcaseCount: int):
-    if not os.path.exists(f"testcases/{problemId}/subtask.json"):
+def readSubtask(testcaseDir: str, testcaseCount: int):
+    if not os.path.exists(f"{testcaseDir}/subtask.json"):
         return {"error": "Subtask file not found"}
-    
-    file = open(f"testcases/{problemId}/subtask.json").read()
+
+    file = open(f"{testcaseDir}/subtask.json").read()
     file = json.loads(file)
     
     data = file.get("data")

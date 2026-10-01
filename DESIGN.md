@@ -659,7 +659,12 @@ alone.
     at cutover, or stranded long ago by the in-memory queue. A finished row always has
     `status` NULL, so a `done` row with a status was never graded;
   - `mark_legacy_testcases` — sets `testcaseVersion = 'legacy'` on every existing
-    problem.
+    problem;
+  - `regrade_weighted_scores` — requeues submissions whose scores are stored in the
+    old weighted unit (§6), which the new renderers would otherwise misread (a
+    full-marks row showing 416/100). A row qualifies when some subtask's weight differs
+    from its case count. In production at deploy time that was exactly the 18 subtask
+    submissions, #103–#120; they show "In queue" until regraded.
 - The worker serves `legacy` problems from the volume's flat layout, exactly where the
   old judge read them. **Migrating testcases to MinIO is not a deploy step.** A problem
   created after the switch has no fallback: an id-named directory on the volume could

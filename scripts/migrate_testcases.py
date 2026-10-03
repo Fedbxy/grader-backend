@@ -9,7 +9,8 @@ re-run: a problem whose archive already hashes to its stored testcaseVersion is
 skipped, so a partial run can simply be repeated.
 
 Environment: DATABASE_URL, S3_ENDPOINT, S3_PORT, S3_ACCESS_KEY, S3_SECRET_KEY,
-S3_BUCKET_NAME, and optionally TESTCASE_ROOT (default /testcases).
+S3_BUCKET_NAME, and optionally TESTCASE_ROOT (default testcases, the same as the
+worker: /app/testcases inside the judge container).
 """
 
 import hashlib
@@ -23,7 +24,7 @@ from pathlib import Path
 import psycopg
 from minio import Minio
 
-TESTCASE_ROOT = Path(os.environ.get("TESTCASE_ROOT", "/testcases"))
+TESTCASE_ROOT = Path(os.environ.get("TESTCASE_ROOT", "testcases"))
 
 # __MACOSX is an artifact of zips built on macOS. Everything else is preserved
 # as uploaded, including helper files such as transform.py, since only the

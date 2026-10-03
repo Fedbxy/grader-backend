@@ -683,7 +683,7 @@ the first.
 disposable cache. Run on the judge host, dry run first, then again with `--apply`:
 
 ```
-docker compose run --rm -e TESTCASE_ROOT=/app/testcases backend python scripts/migrate_testcases.py
+docker compose run --rm backend python scripts/migrate_testcases.py
 ```
 
 It replaces each `legacy` marker with a real version. It reproduces the same archives

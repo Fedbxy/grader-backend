@@ -87,26 +87,16 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            # The judge reads Postgres and MinIO directly, with the same
-            # credentials the frontend uses. Copy any it lacks from the
-            # frontend's .env on this host. Values go file to file and are
-            # never printed: this repository's logs are public.
-            touch .env
-            [ -z "$(tail -c1 .env)" ] || echo >> .env
-            for key in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET_NAME; do
-              grep -q "^$key=" .env || grep "^$key=" ../grader/.env >> .env || echo "warning: $key not found in ../grader/.env"
-            done
-
-            # Deploy the image CI just built. The host's .env names it without
-            # its owner (ghcr.io/grader-backend), which GHCR rejects as "name
-            # invalid"; compose then quietly reuses whatever stale image is
-            # cached here. Exported variables take precedence over .env.
-            export REGISTRY=ghcr.io
-            export IMAGE_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-
             docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
             docker compose pull || { echo "pull failed; not deploying"; exit 1; }
             docker compose up -d --force-recreate
+
+            # Before the image name was fixed, the host ran images it built
+            # itself, tagged ghcr.io/grader-backend:main. Nothing refers to that
+            # tag now; removing it means nothing can start the old judge by
+            # accident. A no-op once it is gone, and refused by Docker if any
+            # container still uses it.
+            docker image rm ghcr.io/grader-backend:main 2>/dev/null && echo "removed old image ghcr.io/grader-backend:main" || true
             docker image prune -f
 
             # Fail the deploy if the judge does not come up. Only fixed status

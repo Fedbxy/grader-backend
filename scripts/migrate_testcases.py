@@ -4,9 +4,15 @@ and record Problem.testcaseVersion.
 
 See DESIGN.md section 3 (testcase distribution) and section 7 step 2.
 
-Dry run by default; pass --apply to upload and write to the database. Safe to
-re-run: a problem whose archive already hashes to its stored testcaseVersion is
-skipped, so a partial run can simply be repeated.
+Only problems still marked 'legacy' are migrated — the same rule the judge uses to
+decide where to read testcases from. Anything with a real version is already in
+storage (uploaded through the admin UI, or migrated by an earlier run) and is never
+re-pushed: its folder may still exist on the volume, but it holds the testcases from
+before the switch-over, and pushing it would overwrite the newer upload.
+
+Dry run by default; pass --apply to upload and write to the database. Safe to re-run:
+a migrated problem gets a real version, so the next run skips it. Avoid uploading
+testcases through the UI while --apply is running.
 
 Environment: DATABASE_URL, S3_ENDPOINT, S3_PORT, S3_ACCESS_KEY, S3_SECRET_KEY,
 S3_BUCKET_NAME, and optionally TESTCASE_ROOT (default testcases, the same as the
@@ -23,8 +29,12 @@ from pathlib import Path
 
 import psycopg
 from minio import Minio
+from minio.error import S3Error
 
 TESTCASE_ROOT = Path(os.environ.get("TESTCASE_ROOT", "testcases"))
+
+# The marker the switch-over migration set on every problem that existed then.
+LEGACY = "legacy"
 
 # __MACOSX is an artifact of zips built on macOS. Everything else is preserved
 # as uploaded, including helper files such as transform.py, since only the
@@ -102,14 +112,38 @@ def main() -> int:
 
     print(f"{'APPLY' if apply else 'DRY RUN'} — root={TESTCASE_ROOT} bucket={bucket}\n")
 
-    failed = uploaded = skipped = 0
+    migrated = in_storage = no_testcases = failed = 0
 
     for problem_id, title, testcases, current_version in problems:
-        directory = TESTCASE_ROOT / str(problem_id)
         label = f"problem {problem_id} ({title})"
+        key = f"problem/{problem_id}/testcase.zip"
 
+        if current_version is None:
+            # Created after the switch-over and never given testcases.
+            print(f"  NONE {label}: no testcases uploaded — nothing to migrate")
+            no_testcases += 1
+            continue
+
+        if current_version != LEGACY:
+            # Already in storage. Confirm the archive really is there, since the
+            # judge fails every submission for a version whose object is missing.
+            try:
+                client.stat_object(bucket, key)
+            except S3Error as error:
+                if error.code != "NoSuchKey":
+                    raise
+                print(f"  FAIL {label}: version {current_version[:12]} recorded but {key} "
+                      "is missing — re-upload its testcases")
+                failed += 1
+                continue
+            print(f"  SKIP {label}: already in storage ({current_version[:12]})")
+            in_storage += 1
+            continue
+
+        directory = TESTCASE_ROOT / str(problem_id)
         if not directory.is_dir():
-            print(f"  FAIL {label}: no testcase directory — judge would report JE")
+            print(f"  FAIL {label}: marked legacy but there is no testcase directory — "
+                  "the judge reports JE for it")
             failed += 1
             continue
 
@@ -121,29 +155,39 @@ def main() -> int:
 
         data, version, member_count = build_archive(directory)
         size_mb = len(data) / 1024 / 1024
-
-        if current_version == version:
-            print(f"  SKIP {label}: already at {version[:12]}")
-            skipped += 1
-            continue
-
-        print(f"  {'PUSH' if apply else 'WOULD PUSH'} {label}: "
+        print(f"  {'MIGRATE' if apply else 'WOULD MIGRATE'} {label}: "
               f"{testcases} cases, {member_count} files, {size_mb:.1f} MB, {version[:12]}")
 
         if apply:
+            # Re-check immediately before writing, so a testcase upload through
+            # the UI since the run started is not overwritten.
+            with conn.cursor() as cur:
+                cur.execute('SELECT "testcaseVersion" FROM problems WHERE id = %s', (problem_id,))
+                if cur.fetchone()[0] != LEGACY:
+                    print(f"    skipped: its testcases were uploaded while this was running")
+                    in_storage += 1
+                    continue
+
             if not client.bucket_exists(bucket):
                 client.make_bucket(bucket)
-            client.put_object(
-                bucket, f"problem/{problem_id}/testcase.zip",
-                io.BytesIO(data), len(data), content_type="application/zip",
-            )
+            client.put_object(bucket, key, io.BytesIO(data), len(data), content_type="application/zip")
+
+            # Only replace the legacy marker. Zero rows means an upload landed in
+            # the moment between the check above and here.
             with conn.cursor() as cur:
                 cur.execute(
-                    'UPDATE problems SET "testcaseVersion" = %s, "updatedAt" = now() WHERE id = %s',
-                    (version, problem_id),
+                    'UPDATE problems SET "testcaseVersion" = %s, "updatedAt" = now() '
+                    'WHERE id = %s AND "testcaseVersion" = %s',
+                    (version, problem_id, LEGACY),
                 )
+                conflicted = cur.rowcount == 0
             conn.commit()
-        uploaded += 1
+            if conflicted:
+                print(f"    CONFLICT: testcases were uploaded during the migration and the "
+                      f"archive just written may be stale — re-upload them for this problem")
+                failed += 1
+                continue
+        migrated += 1
 
     orphans = sorted(on_disk - known)
     if orphans:
@@ -152,7 +196,8 @@ def main() -> int:
         print("  Not touched. Safe to delete once testcases are served from MinIO,")
         print("  since the volume is then only a cache.")
 
-    print(f"\n{uploaded} uploaded, {skipped} unchanged, {failed} failed")
+    print(f"\n{migrated} {'migrated' if apply else 'would be migrated'}, "
+          f"{in_storage} already in storage, {no_testcases} without testcases, {failed} failed")
     conn.close()
     return 1 if failed else 0
 

@@ -90,13 +90,6 @@ jobs:
             docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
             docker compose pull || { echo "pull failed; not deploying"; exit 1; }
             docker compose up -d --force-recreate
-
-            # Before the image name was fixed, the host ran images it built
-            # itself, tagged ghcr.io/grader-backend:main. Nothing refers to that
-            # tag now; removing it means nothing can start the old judge by
-            # accident. A no-op once it is gone, and refused by Docker if any
-            # container still uses it.
-            docker image rm ghcr.io/grader-backend:main 2>/dev/null && echo "removed old image ghcr.io/grader-backend:main" || true
             docker image prune -f
 
             # Fail the deploy if the judge does not come up. Only fixed status

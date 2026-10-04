@@ -21,7 +21,6 @@ class Job:
     code: str
     language: str
     problem_id: int
-    user_id: int
     attempts: int
     time_limit: int
     memory_limit: int
@@ -84,7 +83,7 @@ def claim(conn):
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
             )
-            RETURNING s.id, s.code, s.language, s."problemId", s."userId", s.attempts
+            RETURNING s.id, s.code, s.language, s."problemId", s.attempts
             """
         )
         row = cur.fetchone()
@@ -92,7 +91,7 @@ def claim(conn):
             conn.commit()
             return None
 
-        submission_id, code, language, problem_id, user_id, attempts = row
+        submission_id, code, language, problem_id, attempts = row
         cur.execute(
             'SELECT "timeLimit", "memoryLimit", testcases, "testcaseVersion" '
             "FROM problems WHERE id = %s",
@@ -103,11 +102,11 @@ def claim(conn):
 
     if problem is None:
         # The problem was deleted while the submission was queued.
-        return Job(submission_id, code, language, problem_id, user_id, attempts,
+        return Job(submission_id, code, language, problem_id, attempts,
                    0, 0, 0, None)
 
     time_limit, memory_limit, testcases, testcase_version = problem
-    return Job(submission_id, code, language, problem_id, user_id, attempts,
+    return Job(submission_id, code, language, problem_id, attempts,
                time_limit, memory_limit, testcases, testcase_version)
 
 

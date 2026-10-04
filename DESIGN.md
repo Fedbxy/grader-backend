@@ -52,7 +52,7 @@ Next.js action ──INSERT submission (judgeStatus=pending)──> Postgres
                                                               │
                                                     judge in isolate lane
                                                               │
-                                    UPDATE submission + UPSERT UserProblem (1 txn)
+                                                 UPDATE submission
                                                               │
 Next.js page ◄────────────────── reads submission row ────────┘
 ```
@@ -247,18 +247,17 @@ one worker.
 
 ### Finalize
 
-Result write and `UserProblem` upsert happen in **one transaction** in the worker:
+The worker writes the result to the submission row and nothing else:
 
 ```
-BEGIN
-  UPDATE submissions SET score, result, status=NULL, errorCode, error,
-                         "judgeStatus"='done', "updatedAt"=now()
-  UPSERT user_problems (guard: only if submission.id >= existing submissionId)
-COMMIT
+UPDATE submissions SET score, result, status=NULL, errorCode, error,
+                       "judgeStatus"='done', "updatedAt"=now()
 ```
 
-Either both land or neither does. This is the logic currently in `actions/judge.ts`
-lines 143–204, moved server-side and made atomic.
+It used to upsert `user_problems` (latest submission and solved flag per user and
+problem) in the same transaction. That cache went stale on rejudges, and compile errors
+never updated it, so the frontend now derives both facts from `submissions` instead
+(grader `src/utils/accepted.ts`) and the table is dropped.
 
 ### Prisma `@updatedAt` is client-side
 

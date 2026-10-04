@@ -122,10 +122,10 @@ def progress(conn, submission_id, status):
 
 
 def finish(conn, job, score, result):
-    """Persist a graded result and the user's problem state in one transaction.
+    """Persist a graded result.
 
-    This is the logic that used to live in actions/judge.ts. Doing both writes
-    atomically is the point: a crash between them previously lost the grade.
+    Solved status and each user's latest submission are derived from
+    submissions by the frontend, so nothing else needs writing here.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -136,24 +136,6 @@ def finish(conn, job, score, result):
             WHERE id = %s
             """,
             (score, Json(result), job.id),
-        )
-
-        # Correct on both paths now that score is a passed-case count: full
-        # marks means every case passed.
-        is_accepted = score == job.testcases
-
-        # The WHERE clause is the "only move forward" guard from the old code:
-        # an older submission finishing late must not overwrite a newer one.
-        cur.execute(
-            """
-            INSERT INTO user_problems ("userId", "problemId", "submissionId", "isAccepted")
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT ("userId", "problemId") DO UPDATE
-            SET "submissionId" = EXCLUDED."submissionId",
-                "isAccepted"   = EXCLUDED."isAccepted"
-            WHERE user_problems."submissionId" <= EXCLUDED."submissionId"
-            """,
-            (job.user_id, job.problem_id, job.id, is_accepted),
         )
     conn.commit()
 

@@ -693,6 +693,36 @@ graded before `time_multiplier` was introduced are the known case: locally, subm
 went from 0 to full marks, while the identical code submitted as pypy had always scored
 full.
 
+## Runs (#67)
+
+A Run executes the user's code once on stdin they typed, with no testcases and no
+verdict beyond how the program ended. It lives in its own `runs` table (created by the
+website's migration; the judge never creates it) with the same `judgeStatus` /
+`status` / `attempts` columns as `submissions`, so claiming, retry and recovery follow
+the same rules.
+
+- **Priority.** A lane tries `claim()` first and only if no submission is pending tries
+  `claim_run()`. That is effectively priority 2 (live 0, rejudge 1, run 2); runs never
+  delay a graded submission. `claim_run` is the same `FOR UPDATE SKIP LOCKED` pattern,
+  ordered by `id`.
+- **No testcases.** No MinIO fetch and no cache. The box is initialised, the code is
+  compiled (a compile error is `errorCode = 'CE'`, `judgeStatus = 'done'`), then run
+  once with the input as stdin. Limits, language multipliers and the isolate flags are
+  shared with grading through one command builder. The input is written to a file
+  outside the box and deleted afterwards.
+- **Verdicts.** `OK`, `TLE`, `MLE`, `RE` (with `exitCode` / `exitSignal` when isolate
+  reports them), mapped exactly as `execute()` does. An isolate failure is a judge
+  failure (`SE` after `MAX_ATTEMPTS`).
+- **Output caps.** stdout and stderr are each read up to `RUN_OUTPUT_LIMIT_BYTES`
+  (64 KiB): the judge reads `limit + 1` bytes, never the whole file, and sets
+  `stdoutTruncated` / `stderrTruncated` when there was more. Output is decoded as UTF-8
+  with replacement and stripped of NUL bytes, which Postgres text cannot hold.
+- **Deleted rows.** A user has one run at a time: starting a new one deletes the last,
+  even mid-judge, and runs are deleted after an hour anyway. So every write may match no
+  row. That is not an error; nobody is waiting for that result.
+- **Writes** set `"updatedAt" = now()` like every raw write (Prisma's `@updatedAt` is
+  client-side). Startup requeue treats runs stuck in `'judging'` like submissions.
+
 ## 8. Open decisions
 
 - **Cache eviction**: implement LRU now, or leave the cache unbounded (matching today's

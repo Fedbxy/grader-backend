@@ -21,6 +21,13 @@ services:
     networks:
       - grader_grader-network
     restart: unless-stopped
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./src
+          target: /app/src
+        - action: rebuild
+          path: requirements.txt
 
 volumes:
   backend-data:

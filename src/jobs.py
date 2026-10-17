@@ -28,6 +28,23 @@ class Job:
     testcase_version: str | None
 
 
+@dataclass
+class RunJob:
+    """A claimed Run (DESIGN.md "Runs (#67)").
+
+    Deliberately not a Job: a run has no testcases, so a submission code path
+    handed one would fail on a missing field instead of grading it wrongly.
+    """
+    id: int
+    code: str
+    language: str
+    input: str
+    problem_id: int
+    attempts: int
+    time_limit: int
+    memory_limit: int
+
+
 def requeue_abandoned(conn):
     """Reclaim work stranded by a crash or restart (DESIGN.md section 2).
 
@@ -58,6 +75,25 @@ def requeue_abandoned(conn):
             """
         )
         requeued = cur.rowcount
+
+        # Runs follow the same rules as submissions.
+        cur.execute(
+            """
+            UPDATE runs SET "judgeStatus" = 'failed', status = NULL,
+                   "errorCode" = 'JE', error = 'Judge failed repeatedly',
+                   "updatedAt" = now()
+            WHERE "judgeStatus" = 'judging' AND attempts >= %s
+            """,
+            (settings.MAX_ATTEMPTS,),
+        )
+        failed += cur.rowcount
+        cur.execute(
+            """
+            UPDATE runs SET "judgeStatus" = 'pending', "updatedAt" = now()
+            WHERE "judgeStatus" = 'judging'
+            """
+        )
+        requeued += cur.rowcount
     conn.commit()
     if requeued or failed:
         log.info("startup: requeued %d abandoned, failed %d exhausted", requeued, failed)
@@ -183,5 +219,122 @@ def release(conn, submission_id):
             'UPDATE submissions SET "judgeStatus" = \'pending\', "updatedAt" = now() '
             "WHERE id = %s AND \"judgeStatus\" = 'judging'",
             (submission_id,),
+        )
+    conn.commit()
+
+
+
+def claim_run(conn):
+    """Take the next Run, or None when there are none.
+
+    Only called once claim() has found no submission, which is what puts runs
+    behind everything else (effectively priority 2: live 0, rejudge 1, run 2).
+    A run is someone waiting on a custom input, but a graded submission still
+    outranks it.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE runs r
+            SET "judgeStatus" = 'judging', attempts = attempts + 1, "updatedAt" = now()
+            WHERE r.id = (
+                SELECT id FROM runs
+                WHERE "judgeStatus" = 'pending'
+                ORDER BY id
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            RETURNING r.id, r.code, r.language, r.input, r."problemId", r.attempts
+            """
+        )
+        row = cur.fetchone()
+        if row is None:
+            conn.commit()
+            return None
+
+        run_id, code, language, input_text, problem_id, attempts = row
+        cur.execute(
+            'SELECT "timeLimit", "memoryLimit" FROM problems WHERE id = %s',
+            (problem_id,),
+        )
+        problem = cur.fetchone()
+    conn.commit()
+
+    if problem is None:
+        # The problem was deleted while the run was queued. Runs cascade with
+        # their problem, so the row is gone and the writes below update nothing.
+        return RunJob(run_id, code, language, input_text, problem_id, attempts, 0, 0)
+
+    time_limit, memory_limit = problem
+    return RunJob(run_id, code, language, input_text, problem_id, attempts,
+                  time_limit, memory_limit)
+
+
+# The website deletes runs older than an hour, so every write below may find
+# its row gone. That updates zero rows, which is fine: nobody is waiting.
+
+def run_progress(conn, run_id, status):
+    """Write the progress string the UI renders for a run."""
+    with conn.cursor() as cur:
+        cur.execute(
+            'UPDATE runs SET status = %s, "updatedAt" = now() WHERE id = %s',
+            (status, run_id),
+        )
+    conn.commit()
+
+
+def finish_run(conn, run_id, outcome):
+    """Persist a run that executed. outcome is a judge.RunOutcome."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE runs
+            SET verdict = %s, "exitCode" = %s, "exitSignal" = %s,
+                stdout = %s, "stdoutTruncated" = %s,
+                stderr = %s, "stderrTruncated" = %s,
+                time = %s, memory = %s,
+                status = NULL, "errorCode" = NULL, error = NULL,
+                "judgeStatus" = 'done', "updatedAt" = now()
+            WHERE id = %s
+            """,
+            (outcome.verdict, outcome.exitCode, outcome.exitSignal,
+             outcome.stdout, outcome.stdoutTruncated,
+             outcome.stderr, outcome.stderrTruncated,
+             outcome.time, outcome.memory, run_id),
+        )
+    conn.commit()
+
+
+def _write_run_error(conn, run_id, error_code, message, judge_status):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE runs
+            SET status = NULL, "errorCode" = %s, error = %s,
+                "judgeStatus" = %s, "updatedAt" = now()
+            WHERE id = %s
+            """,
+            (error_code, message.replace("\x00", ""), judge_status, run_id),
+        )
+    conn.commit()
+
+
+def finish_run_error(conn, run_id, error_code, message):
+    """The user's own mistake, such as a compile error: the run is 'done'."""
+    _write_run_error(conn, run_id, error_code, message, "done")
+
+
+def fail_run(conn, run_id, error_code, message):
+    """A judge-side failure, marked 'failed' like fail() does for submissions."""
+    _write_run_error(conn, run_id, error_code, message, "failed")
+
+
+def release_run(conn, run_id):
+    """Put a run back in the queue; only if still 'judging', as release() does."""
+    with conn.cursor() as cur:
+        cur.execute(
+            'UPDATE runs SET "judgeStatus" = \'pending\', "updatedAt" = now() '
+            "WHERE id = %s AND \"judgeStatus\" = 'judging'",
+            (run_id,),
         )
     conn.commit()

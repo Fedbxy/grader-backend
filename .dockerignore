@@ -8,4 +8,5 @@ docker-compose*
 .github
 *.md
 LICENSE
+.env*
 .DS_Store

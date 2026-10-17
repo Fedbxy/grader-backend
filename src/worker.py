@@ -1,7 +1,9 @@
-"""The judge worker: claims submissions from Postgres and grades them.
+"""The judge worker: claims submissions and runs from Postgres and executes them.
 
 Replaces the HTTP handshake in main.py/que.py. Each lane is a thread owning a
 fixed isolate box id, looping: claim -> sync testcases -> grade -> persist.
+A run (custom-input execution, #67) takes the same path minus the testcases, and
+is claimed only when no submission is waiting.
 
 Correctness does not depend on NOTIFY. The listener only shortens latency; a
 lane that is never notified still claims on its poll interval.
@@ -19,7 +21,7 @@ import jobs
 import testcases as testcase_cache
 from config import settings
 from isolate import initIsolate, cleanupIsolate
-from judge import evaluate
+from judge import evaluate, run_once
 from testcases import TestcaseError
 from utils import createFile
 
@@ -104,6 +106,52 @@ def handle(lane: int, job: jobs.Job):
         stop.wait(settings.POLL_INTERVAL * job.attempts)
 
 
+def process_run(lane: int, job: jobs.RunJob):
+    """Execute one claimed run on its custom input and persist the outcome."""
+    def progress(status):
+        with db.pool.connection() as conn:
+            jobs.run_progress(conn, job.id, status)
+
+    isolate_path = initIsolate(lane)
+    try:
+        createFile(isolate_path, lane, job.language, job.code)
+        outcome = run_once(
+            isolate_path, lane, job.input,
+            job.time_limit, job.memory_limit, job.language,
+            onProgress=progress,
+        )
+    finally:
+        cleanupIsolate(lane)
+
+    with db.pool.connection() as conn:
+        if outcome.errorCode == "CE":
+            # As for submissions, a compile error is the user's result, not a
+            # judge failure.
+            jobs.finish_run_error(conn, job.id, "CE", outcome.error)
+        elif outcome.errorCode:
+            jobs.fail_run(conn, job.id, outcome.errorCode, outcome.error)
+        else:
+            jobs.finish_run(conn, job.id, outcome)
+
+    log.info("run %s executed (%s)", job.id, outcome.verdict or outcome.errorCode)
+
+
+def handle_run(lane: int, job: jobs.RunJob):
+    """handle() for runs: same retry rules, minus testcase errors."""
+    try:
+        process_run(lane, job)
+    except psycopg.Error:
+        raise
+    except Exception as error:
+        log.exception("run %s failed on attempt %d", job.id, job.attempts)
+        with db.pool.connection() as conn:
+            if job.attempts >= settings.MAX_ATTEMPTS:
+                jobs.fail_run(conn, job.id, "SE", str(error))
+                return
+            jobs.release_run(conn, job.id)
+        stop.wait(settings.POLL_INTERVAL * job.attempts)
+
+
 def lane_loop(lane: int):
     """Claim and grade until stopped. Nothing may end this loop but stop.
 
@@ -115,28 +163,42 @@ def lane_loop(lane: int):
 
     # A job this lane claimed but could not hand back because the database was
     # unreachable. Released first thing once the database returns; otherwise it
-    # would sit in 'judging' until the next restart.
+    # would sit in 'judging' until the next restart. Either a Job or a RunJob:
+    # they live in different tables, so the kind decides which row to release.
     stranded = None
 
     while not stop.is_set():
         try:
             if stranded is not None:
+                is_run = isinstance(stranded, jobs.RunJob)
                 with db.pool.connection() as conn:
-                    jobs.release(conn, stranded.id)
-                log.info("lane %d handed back submission %s after the database recovered", lane, stranded.id)
+                    if is_run:
+                        jobs.release_run(conn, stranded.id)
+                    else:
+                        jobs.release(conn, stranded.id)
+                log.info("lane %d handed back %s %s after the database recovered",
+                         lane, "run" if is_run else "submission", stranded.id)
                 stranded = None
 
             with db.pool.connection() as conn:
                 job = jobs.claim(conn)
+                # Runs only get a lane when no submission is waiting.
+                if job is None:
+                    job = jobs.claim_run(conn)
 
             if job is None:
                 wakeup.wait(settings.POLL_INTERVAL)
                 wakeup.clear()
                 continue
 
-            log.info("lane %d claimed submission %s (attempt %d)", lane, job.id, job.attempts)
-            stranded = job
-            handle(lane, job)
+            if isinstance(job, jobs.RunJob):
+                log.info("lane %d claimed run %s (attempt %d)", lane, job.id, job.attempts)
+                stranded = job
+                handle_run(lane, job)
+            else:
+                log.info("lane %d claimed submission %s (attempt %d)", lane, job.id, job.attempts)
+                stranded = job
+                handle(lane, job)
             stranded = None
         except Exception:
             log.exception("lane %d: database unavailable, retrying", lane)

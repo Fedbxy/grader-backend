@@ -18,6 +18,20 @@ def createFile(isolatePath: str, box: int, language: str, code: str):
     return path
 
 
+def readCapped(path: str, limit: int):
+    """Read at most limit bytes of a file as text, and whether more existed.
+
+    A program can write far more than a Run keeps, so the file is never read
+    whole. NUL bytes are dropped because Postgres text cannot store them.
+    """
+    with open(path, "rb") as file:
+        data = file.read(limit + 1)
+
+    truncated = len(data) > limit
+    data = data[:limit].replace(b"\x00", b"")
+    return data.decode("utf-8", errors="replace"), truncated
+
+
 def removeFile(box: int):
     meta = f"tmp/{box}.meta"
     dir = os.path.dirname(meta)

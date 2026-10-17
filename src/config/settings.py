@@ -39,6 +39,11 @@ MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
 # largest expected output on record is 2.8 MB.
 OUTPUT_LIMIT_KB = int(os.environ.get("OUTPUT_LIMIT_KB", str(64 * 1024)))
 
+# How much of a Run's stdout and stderr is stored, each. The rest is cut and the
+# run is flagged truncated, so a program that prints megabytes cannot bloat a
+# row the website serves on every poll.
+RUN_OUTPUT_LIMIT_BYTES = int(os.environ.get("RUN_OUTPUT_LIMIT_BYTES", str(64 * 1024)))
+
 WORKER_ID = os.environ.get("WORKER_ID", socket.gethostname())
 
 NOTIFY_CHANNEL = "submission_queued"

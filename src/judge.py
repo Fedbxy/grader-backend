@@ -5,7 +5,7 @@ from pathlib import Path
 
 from config import settings
 from config.languages import LANGUAGE_REGISTRY
-from utils import normalizeOutput, removeFile, readSubtask
+from utils import normalizeOutput, removeFile, readSubtask, readCapped
 from isolate import readMetaFile
 
 
@@ -44,18 +44,13 @@ def compile(box: int, language: str):
     return None
 
 
-def execute(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memoryLimit: int, language: str, testcase: int):
-    inputPath = f"{testcaseDir}/{testcase}.in"
-    expectedOutputPath = f"{testcaseDir}/{testcase}.sol"
+def isolateRunCommand(box: int, metaPath: str, outputPath: str, errorPath: str, timeLimit: float, memoryLimit: float, language: str):
+    """The isolate invocation for running a program once.
 
-    metaPath = f"tmp/{box}.meta"
-    outputPath = f"{box}.output"
-    errorPath = f"{box}.error"
-
-    timeLimit *= LANGUAGE_REGISTRY[language]["time_multiplier"]
-    memoryLimit *= LANGUAGE_REGISTRY[language]["memory_multiplier"]
-
-    cmd = [
+    Shared by testcase grading and runs so the sandbox limits cannot drift
+    apart. Limits arrive already scaled by the language multipliers.
+    """
+    return [
         "isolate",
         f"--box-id={box}",
         f"--meta={metaPath}",
@@ -69,6 +64,9 @@ def execute(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memory
         "--"
     ] + LANGUAGE_REGISTRY[language]["execute"](box)
 
+
+def runIsolate(cmd: list, inputPath: str, timeLimit: float):
+    """Run an isolate command with inputPath as stdin and wait for it to end."""
     with open(inputPath, "r") as inputFile:
         process = subprocess.Popen(cmd, shell=False, text=True, stdin=inputFile, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -77,6 +75,44 @@ def execute(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memory
     except subprocess.TimeoutExpired:
         process.kill()
         raise Exception("Isolate didn't terminate in time")
+
+
+def classify(meta: dict):
+    """Map an isolate meta file to TLE, MLE, RE, or None when the program ran to completion.
+
+    Raises when isolate itself failed, which is the judge's fault, not the program's.
+    """
+    status = "status" in meta and meta["status"] or None
+    exitsig = "exitsig" in meta and meta["exitsig"] or None
+
+    if status and status == "XX":
+        raise Exception("Isolate failed to execute")
+
+    if status and status == "TO":
+        return "TLE"
+
+    if exitsig and exitsig == "6":
+        return "MLE"
+
+    if status and (status == "SG" or status == "RE"):
+        return "RE"
+
+    return None
+
+
+def execute(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memoryLimit: int, language: str, testcase: int):
+    inputPath = f"{testcaseDir}/{testcase}.in"
+    expectedOutputPath = f"{testcaseDir}/{testcase}.sol"
+
+    metaPath = f"tmp/{box}.meta"
+    outputPath = f"{box}.output"
+    errorPath = f"{box}.error"
+
+    timeLimit *= LANGUAGE_REGISTRY[language]["time_multiplier"]
+    memoryLimit *= LANGUAGE_REGISTRY[language]["memory_multiplier"]
+
+    cmd = isolateRunCommand(box, metaPath, outputPath, errorPath, timeLimit, memoryLimit, language)
+    runIsolate(cmd, inputPath, timeLimit)
 
     meta = readMetaFile(metaPath)
     output = open(f"{isolatePath}/{outputPath}").read()
@@ -87,23 +123,19 @@ def execute(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memory
         "memory": float(meta["max-rss"]),
     }
 
-    status = "status" in meta and meta["status"] or None
-    exitsig = "exitsig" in meta and meta["exitsig"] or None
+    verdict = classify(meta)
 
-    if status and status == "XX":
-        raise Exception("Isolate failed to execute")
-
-    if status and status == "TO":
+    if verdict == "TLE":
         result["verdict"] = "TLE"
         result["time"] = timeLimit
         return result
 
-    if exitsig and exitsig == "6":
+    if verdict == "MLE":
         result["verdict"] = "MLE"
         result["memory"] = memoryLimit * 1024
         return result
 
-    if status and (status == "SG" or status == "RE"):
+    if verdict == "RE":
         result["verdict"] = "RE"
         return result
 
@@ -113,6 +145,98 @@ def execute(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memory
 
     result["verdict"] = "WA"
     return result
+
+
+@dataclass
+class RunOutcome:
+    """Outcome of one Run (DESIGN.md "Runs (#67)").
+
+    errorCode set means the program never ran: CE is the user's compile error.
+    Otherwise verdict is OK, TLE, MLE or RE and the output fields are filled.
+    """
+    verdict: str | None = None
+    exitCode: int | None = None
+    exitSignal: int | None = None
+    stdout: str = ""
+    stdoutTruncated: bool = False
+    stderr: str = ""
+    stderrTruncated: bool = False
+    time: float | None = None
+    memory: float | None = None
+    errorCode: str | None = None
+    error: str | None = None
+
+
+def run_once(isolatePath: str, box: int, stdin: str, timeLimit: int, memoryLimit: int, language: str, onProgress=None) -> RunOutcome:
+    """Compile and run the code in the box once on the given stdin.
+
+    No testcases are involved. The caller owns the box: it is initialised
+    before and cleaned up after.
+    """
+    def progress(status):
+        if onProgress:
+            onProgress(status)
+
+    progress("Compiling")
+    compileResult = compile(box, language)
+    if compileResult:
+        return RunOutcome(errorCode="CE", error=compileResult)
+
+    progress("Running")
+
+    metaPath = f"tmp/{box}.meta"
+    # Kept outside the box so the program cannot read or replace it; like a
+    # testcase input, it reaches the program only as stdin.
+    inputPath = f"tmp/{box}.stdin"
+    outputPath = f"{box}.output"
+    errorPath = f"{box}.error"
+
+    timeLimit *= LANGUAGE_REGISTRY[language]["time_multiplier"]
+    memoryLimit *= LANGUAGE_REGISTRY[language]["memory_multiplier"]
+
+    os.makedirs("tmp", exist_ok=True)
+    open(f"{isolatePath}/{outputPath}", "w").close()
+    open(f"{isolatePath}/{errorPath}", "w").close()
+
+    try:
+        # Explicit so non-ASCII input never depends on the container locale.
+        with open(inputPath, "w", encoding="utf-8") as inputFile:
+            inputFile.write(stdin)
+
+        cmd = isolateRunCommand(box, metaPath, outputPath, errorPath, timeLimit, memoryLimit, language)
+        runIsolate(cmd, inputPath, timeLimit)
+
+        meta = readMetaFile(metaPath)
+        verdict = classify(meta)
+    finally:
+        if os.path.exists(inputPath):
+            os.remove(inputPath)
+        removeFile(box)
+
+    # A program may print up to OUTPUT_LIMIT_KB; only the head is kept, and it
+    # is read as a head rather than read whole and sliced.
+    stdout, stdoutTruncated = readCapped(f"{isolatePath}/{outputPath}", settings.RUN_OUTPUT_LIMIT_BYTES)
+    stderr, stderrTruncated = readCapped(f"{isolatePath}/{errorPath}", settings.RUN_OUTPUT_LIMIT_BYTES)
+
+    outcome = RunOutcome(
+        verdict=verdict or "OK",
+        stdout=stdout, stdoutTruncated=stdoutTruncated,
+        stderr=stderr, stderrTruncated=stderrTruncated,
+        time=float(meta["time"]) * 1000,
+        memory=float(meta["max-rss"]),
+    )
+
+    if verdict == "TLE":
+        outcome.time = timeLimit
+    elif verdict == "MLE":
+        outcome.memory = memoryLimit * 1024
+    elif verdict == "RE":
+        if "exitcode" in meta:
+            outcome.exitCode = int(meta["exitcode"])
+        if "exitsig" in meta:
+            outcome.exitSignal = int(meta["exitsig"])
+
+    return outcome
 
 
 def evaluate(isolatePath: str, box: int, testcaseDir: str, timeLimit: int, memoryLimit: int, testcases: int, language: str, onProgress=None) -> JudgeResult:
